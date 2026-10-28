@@ -1,0 +1,12 @@
+﻿[
+  --entrypoints.web.address=:80,
+  --entrypoints.websecure.address=:443,
+  --entrypoints.traefik.address=:8080,
+  --entrypoints.amqps.address=:5671,
+  --entrypoints.web.http.redirections.entrypoint.to=:8443,
+  --entrypoints.web.http.redirections.entrypoint.scheme=https,
+  --ping=true,
+  --providers.file.directory=/etc/traefik/dynamic,
+  --api.dashboard=true,
+  --api.insecure=true
+]
