@@ -93,6 +93,50 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         await app.StopAsync(cts.Token);
     }
 
+    [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
+    public async Task BasicAuthWithPlainPasswordAndStrippedPrefix()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var password = builder.AddParameter("password", "s3cret", secret: true);
+        var traefik = builder.AddTraefik("traefik");
+        var auth = traefik.AddBasicAuth("auth", "admin", password);
+
+        var whoami = builder.AddContainer("whoami", WhoamiImage)
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"whoami.dev.localhost");
+                route.PathPrefix = "/app";
+                route.StripPathPrefix = true;
+            })
+            .WithTraefikMiddleware(auth);
+
+        await using var app = builder.Build();
+        await app.StartAsync(cts.Token);
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+
+        using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
+
+        using var anonymous = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token, "/app/test");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/app/test");
+        request.Headers.Host = "whoami.dev.localhost";
+        request.Headers.Authorization = new("Basic", Convert.ToBase64String("admin:s3cret"u8.ToArray()));
+        using var authenticated = await httpClient.SendAsync(request, cts.Token);
+        Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+
+        var body = await authenticated.Content.ReadAsStringAsync(cts.Token);
+        Assert.Contains("GET /test HTTP/1.1", body);
+
+        await app.StopAsync(cts.Token);
+    }
+
     private static async Task<HttpResponseMessage> SendWithRetryAsync(HttpClient httpClient, string host, CancellationToken cancellationToken, string path = "/")
     {
         // Traefik reports healthy before the file provider has necessarily loaded the dynamic configuration, so

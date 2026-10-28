@@ -31,10 +31,24 @@ if (builder.Configuration.GetValue<bool>("Traefik:EnableHttps"))
         .WithHttpsRedirect();
 }
 
-// A container backend, reached by its name on the container network.
+// Middlewares shared by several routes: security headers and compression, applied as one chain.
+var defaults = traefik.AddChain("defaults",
+    traefik.AddSecurityHeaders("security-headers"),
+    traefik.AddCompress("compress"));
+
+// Basic authentication. A plain password can only be hashed in run mode; a published app takes an htpasswd entry
+// (`htpasswd -nbB admin <password>`), which also keeps the password out of the deployment.
+var adminAuth = builder.ExecutionContext.IsPublishMode
+    ? traefik.AddBasicAuth("admin-auth", builder.AddParameter("admin-htpasswd", secret: true))
+    : traefik.AddBasicAuth("admin-auth", "admin", builder.AddParameter("admin-password", secret: true));
+
+// A container backend, reached by its name on the container network. admin.<domain> is the same backend behind
+// basic authentication.
 builder.AddContainer("whoami", "traefik/whoami", "v1.11")
     .WithHttpEndpoint(targetPort: 80)
-    .WithTraefikRoute(traefik, ReferenceExpression.Create($"whoami.{domain}"));
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"whoami.{domain}"))
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"admin.{domain}"), adminAuth)
+    .WithTraefikMiddleware(defaults);
 
 // A project backend, running on the host and reached from the Traefik container.
 var api = builder.AddProject<Projects.Traefik_Api>("api")
@@ -45,7 +59,16 @@ var api = builder.AddProject<Projects.Traefik_Api>("api")
         route.Host = ReferenceExpression.Create($"app.{domain}");
         route.PathPrefix = "/v1";
         route.RouterName = "api-v1";
-    });
+    })
+    .WithTraefikRoute(traefik, route =>
+    {
+        // app.<domain>/api/... reaches the API without the prefix; Traefik passes it in X-Forwarded-Prefix.
+        route.Host = ReferenceExpression.Create($"app.{domain}");
+        route.PathPrefix = "/api";
+        route.StripPathPrefix = true;
+        route.RouterName = "api-stripped";
+    })
+    .WithTraefikMiddleware(traefik.AddRateLimit("api-rate-limit", average: 20, burst: 40));
 
 // The API reports its own public URL, as an OAuth redirect URI or a link in an email would need.
 api.WithEnvironment("PUBLIC_URL", api.GetTraefikUrl());

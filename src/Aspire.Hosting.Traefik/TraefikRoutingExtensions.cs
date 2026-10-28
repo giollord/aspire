@@ -108,7 +108,7 @@ public static class TraefikRoutingExtensions
     /// <typeparam name="T">The type of the routed resource.</typeparam>
     /// <param name="builder">The builder of the routed resource.</param>
     /// <param name="traefik">The Traefik resource that receives the requests.</param>
-    /// <param name="configure">Configures the route. At least a host or a path prefix is required.</param>
+    /// <param name="configure">Configures the route. At least one matcher, such as a host or a path prefix, is required.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <example>
     /// <code lang="csharp">
@@ -132,20 +132,19 @@ public static class TraefikRoutingExtensions
         var options = new TraefikRouteOptions();
         configure(options);
 
-        if (options.Host is null && string.IsNullOrEmpty(options.PathPrefix))
+        if (options.StripPathPrefix && string.IsNullOrEmpty(options.PathPrefix))
         {
-            throw new ArgumentException("A Traefik route needs a host, a path prefix, or both.", nameof(configure));
+            throw new ArgumentException("StripPathPrefix needs a path prefix to strip.", nameof(configure));
         }
 
-        if (options.PathPrefix is { } pathPrefix && !pathPrefix.StartsWith('/'))
+        try
         {
-            throw new ArgumentException($"The path prefix '{pathPrefix}' must start with '/'.", nameof(configure));
+            // Build the rule once now so invalid values fail where the route is declared, not at startup.
+            TraefikRouteRule.Build(options);
         }
-
-        if (options.PathPrefix?.Contains('`') == true)
+        catch (ArgumentException ex)
         {
-            // Rule values are quoted with backticks, so a backtick would end the value early.
-            throw new ArgumentException("The path prefix can't contain '`'.", nameof(configure));
+            throw new ArgumentException(ex.Message, nameof(configure), ex);
         }
 
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();

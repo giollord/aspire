@@ -18,7 +18,15 @@ aspire run
 | `http://whoami.dev.localhost:8000` | `traefik/whoami` container | Routing to a container; the echoed request shows the `X-Forwarded-*` headers Traefik adds. |
 | `http://api.dev.localhost:8000` | `Traefik.Api` project | Routing to a process on the host. The response includes `PUBLIC_URL`, computed with `GetTraefikUrl()`. |
 | `http://app.dev.localhost:8000/v1/hello` | `Traefik.Api` project | A second, path-based route (`PathPrefix(/v1)`) to the same project. |
+| `http://app.dev.localhost:8000/api/` | `Traefik.Api` project | `StripPathPrefix`: the API sees `/`, and `X-Forwarded-Prefix: /api`. |
+| `http://admin.dev.localhost:8000` | `traefik/whoami` container | Basic authentication (`admin` / `admin`, from `Parameters:admin-password`). |
 | Traefik resource → **Dashboard** link | Traefik API | The Traefik dashboard with the generated routers and services. |
+
+Middlewares:
+
+- `whoami` (both routes) uses the `defaults` chain: security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`; HSTS on HTTPS only) and compression. Check the response headers in the browser's developer tools.
+- `api` (all routes) is rate-limited to 20 requests per second with bursts of 40; more get `429`.
+- The middlewares appear under `traefik` in the Aspire dashboard and in the Traefik dashboard.
 
 In the Aspire dashboard:
 
@@ -42,4 +50,6 @@ Set `Traefik:EnableHttps` to `true` to add the `websecure` entry point with a re
 aspire publish -o ./out
 ```
 
-`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules.
+`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them.
+
+When published, basic authentication takes an htpasswd entry in the `ADMIN_HTPASSWD` variable instead of a plain password. Create one with `htpasswd -nbB admin <password>`. Docker Compose interpolates `$` in `.env` values, so put it in single quotes there: `ADMIN_HTPASSWD='admin:$2y$05$...'`.

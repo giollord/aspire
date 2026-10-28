@@ -118,7 +118,8 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, "Route"));
                 }
 
-                foreach (var middleware in routes.SelectMany(r => r.Middlewares).Distinct())
+                // Only middleware resources: the StripPathPrefix middleware isn't in the model.
+                foreach (var middleware in routes.SelectMany(r => r.Middlewares).Distinct().Where(m => m.Parent.Middlewares.Contains(m)))
                 {
                     resource.Annotations.Add(new ResourceRelationshipAnnotation(middleware, "Middleware"));
                 }
@@ -139,11 +140,28 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         // Resource-wide middlewares (usually authentication or security headers) run before the route's own ones
         // (usually path rewrites), so they see the request as the client sent it. A middleware listed in both
         // places runs once, at its first position.
-        return resourceMiddlewares
+        var middlewares = resourceMiddlewares
             .Where(m => m.Parent == annotation.Traefik)
             .Concat(annotation.Options.Middlewares)
             .Distinct()
             .ToList();
+
+        if (annotation.Options.StripPathPrefix)
+        {
+            // Last, so the route's own middlewares still see the path the route matched on. The middleware only
+            // exists in Traefik's configuration, not as a resource.
+            var name = $"{routerName}-strip";
+            if (annotation.Traefik.Middlewares.Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' strips its path prefix with a middleware named '{name}', but '{annotation.Traefik.Name}' already has a middleware with that name.");
+            }
+
+            var strip = new TraefikMiddlewareResource(name, "stripPrefix", annotation.Traefik);
+            strip.Options.Set("prefixes", new object[] { annotation.Options.PathPrefix! });
+            middlewares.Add(strip);
+        }
+
+        return middlewares;
     }
 
     private static void AddPublicUrls(IResource resource, List<TraefikRoute> routes)

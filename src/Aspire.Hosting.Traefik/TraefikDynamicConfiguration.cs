@@ -49,13 +49,9 @@ internal static class TraefikDynamicConfiguration
 
         foreach (var route in traefik.Routes)
         {
-            var host = route.Options.Host is { } hostExpression
-                ? await hostExpression.GetValueAsync(context, cancellationToken).ConfigureAwait(false)
-                : null;
-
             var router = new Dictionary<string, object>
             {
-                ["rule"] = TraefikRule.Build(host, route.Options.PathPrefix),
+                ["rule"] = await TraefikRouteRule.Build(route.Options).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty,
                 ["entryPoints"] = new[] { route.Options.EntryPoint ?? defaults.EntryPointName },
                 ["service"] = route.RouterName,
             };
@@ -92,9 +88,10 @@ internal static class TraefikDynamicConfiguration
             };
         }
 
-        // Every middleware of this Traefik is written, including unused ones, which Traefik accepts.
+        // Every middleware of this Traefik is written, including unused ones, which Traefik accepts. Routes can also
+        // carry middlewares that aren't resources, such as the one behind TraefikRouteOptions.StripPathPrefix.
         var middlewares = new Dictionary<string, object>();
-        foreach (var middleware in traefik.Middlewares)
+        foreach (var middleware in traefik.Middlewares.Concat(traefik.Routes.SelectMany(r => r.Middlewares)).Distinct())
         {
             middlewares[middleware.Name] = new Dictionary<string, object>
             {
@@ -122,36 +119,11 @@ internal static class TraefikDynamicConfiguration
 
         var serializer = new SerializerBuilder()
             .DisableAliases()
+            // Quote strings that YAML would read as another type, such as the string `port: "8443"` of redirectScheme
+            // or a header value of `true`; Traefik's decoder doesn't convert an int into a string field.
+            .WithQuotingNecessaryStrings()
             .Build();
 
         return serializer.Serialize(document);
-    }
-}
-
-/// <summary>
-/// Builds Traefik v3 router rules.
-/// </summary>
-internal static class TraefikRule
-{
-    /// <summary>
-    /// Builds a rule such as <c>Host(`api.example.com`) &amp;&amp; PathPrefix(`/v1`)</c>. Values are quoted with
-    /// backticks, which can't appear in host names or URL paths.
-    /// See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/"/>.
-    /// </summary>
-    public static string Build(string? host, string? pathPrefix)
-    {
-        var matchers = new List<string>(2);
-
-        if (!string.IsNullOrEmpty(host))
-        {
-            matchers.Add($"Host(`{host}`)");
-        }
-
-        if (!string.IsNullOrEmpty(pathPrefix))
-        {
-            matchers.Add($"PathPrefix(`{pathPrefix}`)");
-        }
-
-        return string.Join(" && ", matchers);
     }
 }

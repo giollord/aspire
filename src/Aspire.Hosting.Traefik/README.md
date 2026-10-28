@@ -54,13 +54,64 @@ api.WithTraefikRoute(traefik, route =>
 {
     route.Host = ReferenceExpression.Create($"app.{domain}");
     route.PathPrefix = "/api";
+    route.StripPathPrefix = true;   // the backend sees /orders for /api/orders
     route.EndpointName = "http";
 });
 ```
 
+### Rules
+
+The matcher options of a route are combined with `&&`: `Host`, `PathPrefix`, `Path`, `Methods` and `ClientIps` (any of them), `Headers`, and `Query`. For alternatives, negations, or regular expressions, set `Rule` to a `TraefikRule`, built with `&`, `|`, and `!`:
+
+```csharp
+api.WithTraefikRoute(traefik, route =>
+{
+    route.Host = ReferenceExpression.Create($"api.{domain}");
+    route.Rule = (TraefikRule.PathPrefix("/admin") | TraefikRule.PathRegexp("^/ops/[0-9]+"))
+               & !TraefikRule.ClientIP("203.0.113.0/24");
+});
+// Host(`api.${DOMAIN}`) && (PathPrefix(`/admin`) || PathRegexp(`^/ops/[0-9]+`)) && !ClientIP(`203.0.113.0/24`)
+```
+
+Values are quoted and nested combinations get parentheses. `RawRule` takes a whole rule in Traefik's syntax instead, and can't be combined with the other options. See [rules and priority](https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/).
+
 ## Middlewares
 
-Traefik middlewares change requests or responses on a route, for example by adding headers or rewriting the path. Add one to Traefik with its Traefik type name and options, then apply it to the routes of a resource:
+Traefik middlewares change requests or responses on a route, for example by adding headers or rewriting the path. The common ones have their own methods:
+
+```csharp
+var defaults = traefik.AddChain("defaults",
+    traefik.AddSecurityHeaders("security"),          // HSTS, X-Frame-Options, nosniff, Referrer-Policy
+    traefik.AddCompress("compress"));
+
+var cors = traefik.AddHeaders("cors", headers =>
+{
+    headers.AccessControlAllowOriginList.Add("https://app.example.com");
+    headers.AccessControlAllowMethods.Add("GET");
+});
+
+api.WithTraefikMiddleware(defaults, cors, traefik.AddRateLimit("rate", average: 100, burst: 50));
+```
+
+| Method | Traefik middleware |
+| --- | --- |
+| `AddStripPrefix`, `AddStripPrefixRegex`, `AddAddPrefix`, `AddReplacePath`, `AddReplacePathRegex` | Path rewrites |
+| `AddRedirectScheme`, `AddRedirectRegex` | Redirects |
+| `AddHeaders`, `AddSecurityHeaders` | `headers` (custom headers, CORS, security headers) |
+| `AddBasicAuth` | `basicAuth` |
+| `AddIpAllowList`, `AddRateLimit`, `AddInFlightRequestLimit` | Access and load limits |
+| `AddCompress`, `AddRetry`, `AddCircuitBreaker`, `AddBuffering` | Responses and resilience |
+| `AddChain` | `chain` |
+
+### Basic authentication
+
+`AddBasicAuth` takes one parameter per user, each holding an `htpasswd` entry (`htpasswd -nbB admin <password>`). This works in run mode and when published, and the plain password stays out of the deployment. Docker Compose interpolates `$` in `.env` values, which bcrypt hashes contain, so write the value in single quotes there: `ADMIN_HTPASSWD='admin:$2y$05$...'`.
+
+For local development, `AddBasicAuth(name, user, passwordParameter)` takes a plain password and hashes it with SHA1. It throws when publishing.
+
+### Other middlewares
+
+Any other middleware can be added by its Traefik type name and options:
 
 ```csharp
 var headers = traefik.AddMiddleware("security-headers", "headers")

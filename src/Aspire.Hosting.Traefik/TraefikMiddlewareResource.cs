@@ -50,4 +50,23 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     /// Gets the options of the middleware, the keys under <c>&lt;type&gt;</c> in Traefik's configuration.
     /// </summary>
     internal TraefikOptionMap Options { get; } = new();
+
+    /// <summary>
+    /// Gets the middlewares this middleware refers to by name, such as the members of a <c>chain</c>. Their
+    /// definitions must be published wherever this one is.
+    /// </summary>
+    internal List<TraefikMiddlewareResource> References { get; } = [];
+
+    /// <summary>
+    /// Gets this middleware followed by every middleware it refers to, directly or through other middlewares.
+    /// </summary>
+    internal IEnumerable<TraefikMiddlewareResource> WithReferences()
+    {
+        yield return this;
+
+        foreach (var reference in References.SelectMany(r => r.WithReferences()))
+        {
+            yield return reference;
+        }
+    }
 }

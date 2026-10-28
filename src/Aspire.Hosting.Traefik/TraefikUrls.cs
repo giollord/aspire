@@ -41,9 +41,9 @@ internal static class TraefikUrls
             builder.AppendValueProvider(TraefikStaticConfiguration.GetHostEndpoint(managed, entryPoint).Property(EndpointProperty.Port));
         }
 
-        if (options.PathPrefix is { } pathPrefix)
+        if ((options.PathPrefix ?? options.Path) is { } path)
         {
-            builder.AppendLiteral(pathPrefix);
+            builder.AppendLiteral(path);
         }
 
         return builder.Build();

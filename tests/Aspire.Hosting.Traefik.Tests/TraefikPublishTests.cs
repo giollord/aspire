@@ -199,6 +199,43 @@ public class TraefikPublishTests(ITestOutputHelper testOutputHelper)
         await VerifyComposeOutput(workspace.Path);
     }
 
+    [Fact]
+    public async Task PublishWritesChainMembersRulesAndBasicAuth()
+    {
+        using var workspace = TemporaryWorkspace.Create(testOutputHelper);
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, workspace.Path);
+        builder.Services.AddSingleton<IResourceContainerImageManager, MockImageBuilder>();
+
+        builder.AddDockerComposeEnvironment("compose")
+            .WithDashboard(enabled: false);
+
+        var domain = builder.AddParameter("domain");
+        var htpasswd = builder.AddParameter("admin-htpasswd", secret: true);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        // The chain is the only middleware on the route, so its members must be defined on the service as well.
+        var defaults = traefik.AddChain("defaults", traefik.AddSecurityHeaders("security"), traefik.AddCompress("compress"));
+        var auth = traefik.AddBasicAuth("auth", htpasswd);
+
+        builder.AddContainer("api", "myregistry/api")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.{domain}");
+                route.PathPrefix = "/v1";
+                route.StripPathPrefix = true;
+                route.Rule = TraefikRule.PathRegexp("^/v1/[a-z]{2,8}$") | TraefikRule.Method("OPTIONS");
+                route.Middlewares.Add(auth.Resource);
+            })
+            .WithTraefikMiddleware(defaults);
+
+        using var app = builder.Build();
+        app.Run();
+
+        await VerifyComposeOutput(workspace.Path);
+    }
+
     private static async Task VerifyComposeOutput(string outputPath)
     {
         var composePath = Path.Combine(outputPath, "docker-compose.yaml");

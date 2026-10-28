@@ -35,11 +35,8 @@ internal static class TraefikDockerLabels
         var router = $"traefik.http.routers.{route.RouterName}";
         var loadBalancer = $"traefik.http.services.{route.RouterName}.loadbalancer";
 
-        var host = route.Options.Host is { } hostExpression ? ToComposeExpression(composeService, hostExpression) : null;
-        var pathPrefix = route.Options.PathPrefix is { } prefix ? EscapeLiteral(prefix) : null;
-
         labels["traefik.enable"] = "true";
-        labels[$"{router}.rule"] = TraefikRule.Build(host, pathPrefix);
+        labels[$"{router}.rule"] = ToComposeExpression(composeService, TraefikRouteRule.Build(route.Options));
         labels[$"{router}.entrypoints"] = route.Options.EntryPoint ?? ToComposeExpression(composeService, defaults.EntryPoint);
         labels[$"{router}.service"] = route.RouterName;
 
@@ -68,7 +65,8 @@ internal static class TraefikDockerLabels
             // containers. Within the Docker provider a middleware is referenced without the `@docker` suffix.
             labels[$"{router}.middlewares"] = string.Join(",", route.Middlewares.Select(m => m.Name));
 
-            foreach (var middleware in route.Middlewares)
+            // A chain refers to its members by name, so their definitions go along with it.
+            foreach (var middleware in route.Middlewares.SelectMany(m => m.WithReferences()).Distinct())
             {
                 var definition = $"traefik.http.middlewares.{middleware.Name}.{middleware.Type}";
                 if (middleware.Options.Count == 0)

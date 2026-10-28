@@ -31,6 +31,20 @@ internal static partial class TraefikNames
         // Names can't contain braces, so the composite format string of a literal expression is the text itself.
         expression.ValueProviders.Count == 0 && !expression.IsConditional ? expression.Format : null;
 
+    /// <summary>
+    /// Converts a time span to a Go duration string, which Traefik uses for intervals, for example <c>1s</c> or
+    /// <c>250ms</c>. See <see href="https://pkg.go.dev/time#ParseDuration"/>.
+    /// </summary>
+    public static string ToDuration(TimeSpan value, string parameterName)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero, parameterName);
+
+        // Whole seconds read better; anything finer is written in milliseconds, which Go accepts as well.
+        return value.Ticks % TimeSpan.TicksPerSecond == 0
+            ? FormattableString.Invariant($"{(long)value.TotalSeconds}s")
+            : FormattableString.Invariant($"{(long)Math.Ceiling(value.TotalMilliseconds)}ms");
+    }
+
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9_-]*$")]
     private static partial Regex ValidNameRegex();
 
