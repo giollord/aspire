@@ -61,6 +61,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             }
 
             var routes = new List<TraefikRoute>(annotations.Count);
+            var resourceMiddlewares = resource.Annotations.OfType<TraefikMiddlewareAnnotation>().Select(a => a.Middleware).ToList();
+
+            foreach (var middleware in resourceMiddlewares)
+            {
+                if (!annotations.Any(a => a.Traefik == middleware.Parent))
+                {
+                    throw new InvalidOperationException($"Resource '{resource.Name}' uses the Traefik middleware '{middleware.Name}' of '{middleware.Parent.Name}', but has no route through '{middleware.Parent.Name}'.");
+                }
+            }
 
             for (var i = 0; i < annotations.Count; i++)
             {
@@ -80,7 +89,8 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 routerNames.Add(routerName, resource);
 
                 var endpoint = ResolveEndpoint(resourceWithEndpoints, annotation.Options.EndpointName);
-                var route = new TraefikRoute(annotation.Traefik, resourceWithEndpoints, routerName, endpoint, annotation.Options);
+                var middlewares = GetMiddlewares(resource, routerName, annotation, resourceMiddlewares);
+                var route = new TraefikRoute(annotation.Traefik, resourceWithEndpoints, routerName, endpoint, annotation.Options, middlewares);
 
                 annotation.Traefik.Routes.Add(route);
                 routes.Add(route);
@@ -107,8 +117,33 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 {
                     traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, "Route"));
                 }
+
+                foreach (var middleware in routes.SelectMany(r => r.Middlewares).Distinct())
+                {
+                    resource.Annotations.Add(new ResourceRelationshipAnnotation(middleware, "Middleware"));
+                }
             }
         }
+    }
+
+    private static List<TraefikMiddlewareResource> GetMiddlewares(IResource resource, string routerName, TraefikRouteAnnotation annotation, List<TraefikMiddlewareResource> resourceMiddlewares)
+    {
+        foreach (var middleware in annotation.Options.Middlewares)
+        {
+            if (middleware.Parent != annotation.Traefik)
+            {
+                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' goes through '{annotation.Traefik.Name}', but its middleware '{middleware.Name}' belongs to '{middleware.Parent.Name}'.");
+            }
+        }
+
+        // Resource-wide middlewares (usually authentication or security headers) run before the route's own ones
+        // (usually path rewrites), so they see the request as the client sent it. A middleware listed in both
+        // places runs once, at its first position.
+        return resourceMiddlewares
+            .Where(m => m.Parent == annotation.Traefik)
+            .Concat(annotation.Options.Middlewares)
+            .Distinct()
+            .ToList();
     }
 
     private static void AddPublicUrls(IResource resource, List<TraefikRoute> routes)

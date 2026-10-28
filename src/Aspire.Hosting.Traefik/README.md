@@ -58,6 +58,34 @@ api.WithTraefikRoute(traefik, route =>
 });
 ```
 
+## Middlewares
+
+Traefik middlewares change requests or responses on a route, for example by adding headers or rewriting the path. Add one to Traefik with its Traefik type name and options, then apply it to the routes of a resource:
+
+```csharp
+var headers = traefik.AddMiddleware("security-headers", "headers")
+    .WithOption("frameDeny", true)
+    .WithOption("customRequestHeaders.X-Script-Name", "test");
+
+var strip = traefik.AddMiddleware("strip-v1", "stripPrefix")
+    .WithOption("prefixes", ["/v1"]);
+
+api.WithTraefikMiddleware(headers)                                    // every route of api
+   .WithTraefikRoute(traefik, route =>
+   {
+       route.Host = ReferenceExpression.Create($"app.{domain}");
+       route.PathPrefix = "/v1";
+       route.Middlewares.Add(strip.Resource);                         // this route only
+   });
+```
+
+- Option paths use dots for nested options, as in Traefik's label syntax. Values can be strings, booleans, numbers, lists, parameters, or expressions; at publish time parameters become `${VAR}` placeholders.
+- Middlewares added with `WithTraefikMiddleware` run first, then the route's own, in the order they were added. They also apply to routes added later.
+- In run mode middlewares are written to Traefik's dynamic configuration. At publish time they become `traefik.http.middlewares.*` labels on each service that uses them, so they also work with an external Traefik.
+- Middlewares appear under Traefik in the dashboard.
+
+See the [middleware reference](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/overview/) for the types and their options.
+
 ## Public URLs
 
 `GetTraefikUrl()` returns the address a resource is reachable on through Traefik. In run mode the URL includes Traefik's host port, so it is correct even with randomly assigned ports. Use it for OAuth redirect URIs or public base URLs:

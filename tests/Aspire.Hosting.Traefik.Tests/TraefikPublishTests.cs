@@ -154,6 +154,51 @@ public class TraefikPublishTests(ITestOutputHelper testOutputHelper)
         await VerifyComposeOutput(workspace.Path);
     }
 
+    [Fact]
+    public async Task PublishWritesMiddlewareLabelsOnServicesThatUseThem()
+    {
+        using var workspace = TemporaryWorkspace.Create(testOutputHelper);
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, workspace.Path);
+        builder.Services.AddSingleton<IResourceContainerImageManager, MockImageBuilder>();
+
+        builder.AddDockerComposeEnvironment("compose")
+            .WithDashboard(enabled: false);
+
+        var origin = builder.AddParameter("cors-origin");
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var headers = traefik.AddMiddleware("sec", "headers")
+            .WithOption("frameDeny", true)
+            .WithOption("stsSeconds", 31536000)
+            .WithOption("accessControlAllowOriginList", [ReferenceExpression.Create($"{origin}")]);
+        // `$1` is a regex group reference, which must reach Traefik as is rather than be interpolated by Compose.
+        var rewrite = traefik.AddMiddleware("rewrite", "replacePathRegex")
+            .WithOption("regex", "^/v1/(.*)")
+            .WithOption("replacement", "/$1");
+        var compress = traefik.AddMiddleware("compress", "compress");
+
+        builder.AddContainer("whoami", "traefik/whoami")
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, "whoami.example.com")
+            .WithTraefikMiddleware(headers);
+
+        builder.AddContainer("api", "myregistry/api")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"app.example.com");
+                route.PathPrefix = "/v1";
+                route.Middlewares.Add(rewrite.Resource);
+            })
+            .WithTraefikMiddleware(headers, compress);
+
+        using var app = builder.Build();
+        app.Run();
+
+        await VerifyComposeOutput(workspace.Path);
+    }
+
     private static async Task VerifyComposeOutput(string outputPath)
     {
         var composePath = Path.Combine(outputPath, "docker-compose.yaml");

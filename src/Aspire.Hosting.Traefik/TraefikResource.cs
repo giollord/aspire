@@ -87,6 +87,11 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal List<TraefikEntryPoint> CustomEntryPoints { get; } = [];
 
     /// <summary>
+    /// Gets the middlewares added with <c>AddMiddleware</c> and the other middleware methods.
+    /// </summary>
+    internal List<TraefikMiddlewareResource> Middlewares { get; } = [];
+
+    /// <summary>
     /// Gets the routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/> before the
     /// application starts or publishes.
     /// </summary>

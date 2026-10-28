@@ -114,6 +114,17 @@ public static class TraefikBuilderExtensions
                     {
                         context.EnvironmentVariables[$"ASPIRE_TRAEFIK_BACKEND_{TraefikNames.ToEnvironmentName(route.RouterName)}"] = route.Endpoint;
                     }
+
+                    // The same applies to middleware options that point at another resource, such as a forward
+                    // authentication address.
+                    foreach (var middleware in resource.Middlewares)
+                    {
+                        var index = 0;
+                        foreach (var expression in middleware.Options.GetExpressions().Where(ReferencesEndpoint))
+                        {
+                            context.EnvironmentVariables[$"ASPIRE_TRAEFIK_MIDDLEWARE_{TraefikNames.ToEnvironmentName(middleware.Name)}_{++index}"] = expression;
+                        }
+                    }
                 })
                 .WithContainerFiles(TraefikResource.DynamicConfigurationDirectory, async (_, cancellationToken) =>
                 [
@@ -127,6 +138,14 @@ public static class TraefikBuilderExtensions
 
         return traefik;
     }
+
+    private static bool ReferencesEndpoint(ReferenceExpression expression) =>
+        expression.ValueProviders.Any(provider => provider switch
+        {
+            EndpointReference or EndpointReferenceExpression => true,
+            ReferenceExpression nested => ReferencesEndpoint(nested),
+            _ => false,
+        });
 
     /// <summary>
     /// Sets the host port of the <c>web</c> entry point instead of using a randomly assigned port in run mode or port 80

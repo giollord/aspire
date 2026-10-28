@@ -65,12 +65,18 @@ internal sealed record TraefikEntryPoint(string Name, int TargetPort);
 internal sealed record TraefikRouteAnnotation(TraefikResource Traefik, TraefikRouteOptions Options) : IResourceAnnotation;
 
 /// <summary>
-/// A route resolved by <see cref="TraefikRoutingSubscriber"/>: the annotation plus its final router name and
-/// backend endpoint.
+/// Records a middleware applied to every route of a resource with <c>WithTraefikMiddleware</c>.
+/// </summary>
+internal sealed record TraefikMiddlewareAnnotation(TraefikMiddlewareResource Middleware) : IResourceAnnotation;
+
+/// <summary>
+/// A route resolved by <see cref="TraefikRoutingSubscriber"/>: the annotation plus its final router name, backend
+/// endpoint, and middlewares in the order Traefik runs them.
 /// </summary>
 internal sealed record TraefikRoute(
     TraefikResource Traefik,
     IResourceWithEndpoints Resource,
     string RouterName,
     EndpointReference Endpoint,
-    TraefikRouteOptions Options);
+    TraefikRouteOptions Options,
+    IReadOnlyList<TraefikMiddlewareResource> Middlewares);

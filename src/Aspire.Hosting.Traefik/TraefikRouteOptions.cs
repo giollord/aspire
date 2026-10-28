@@ -53,6 +53,16 @@ public sealed class TraefikRouteOptions
     /// Traefik and to <c>web</c> otherwise.
     /// </summary>
     public string? EntryPoint { get; set; }
+
+    /// <summary>
+    /// Gets the middlewares of this route, in the order Traefik runs them. They run after the middlewares added to
+    /// the whole resource with <c>WithTraefikMiddleware</c>.
+    /// </summary>
+    /// <remarks>
+    /// The middlewares must belong to the Traefik resource the route goes through.
+    /// </remarks>
+    [AspireExportIgnore(Reason = "Polyglot AppHosts pass middlewares to withTraefikRoute or withTraefikMiddleware.")]
+    public IList<TraefikMiddlewareResource> Middlewares { get; } = [];
 }
 
 /// <summary>

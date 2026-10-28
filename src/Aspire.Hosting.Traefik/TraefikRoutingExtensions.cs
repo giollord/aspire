@@ -19,6 +19,7 @@ public static class TraefikRoutingExtensions
     /// <param name="builder">The builder of the routed resource.</param>
     /// <param name="traefik">The Traefik resource that receives the requests.</param>
     /// <param name="host">The host name to match, for example <c>api.dev.localhost</c>.</param>
+    /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <remarks>
     /// Requests go to the resource's <c>http</c> endpoint. Use the overload that takes a configuration callback to
@@ -34,12 +35,12 @@ public static class TraefikRoutingExtensions
     /// </code>
     /// </example>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTraefikRoute export, which accepts a string or a reference expression.")]
-    public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, string host)
+    public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, string host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
         where T : IResourceWithEndpoints
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        return builder.WithTraefikRoute(traefik, options => options.Host = ReferenceExpression.Create($"{host}"));
+        return builder.WithTraefikRoute(traefik, ReferenceExpression.Create($"{host}"), middlewares);
     }
 
     /// <summary>
@@ -49,6 +50,7 @@ public static class TraefikRoutingExtensions
     /// <param name="builder">The builder of the routed resource.</param>
     /// <param name="traefik">The Traefik resource that receives the requests.</param>
     /// <param name="host">The host name to match. It can reference parameters, which stay placeholders at publish time.</param>
+    /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <example>
     /// <code lang="csharp">
@@ -60,12 +62,22 @@ public static class TraefikRoutingExtensions
     /// </code>
     /// </example>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTraefikRoute export, which accepts a string or a reference expression.")]
-    public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, ReferenceExpression host)
+    public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, ReferenceExpression host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
         where T : IResourceWithEndpoints
     {
         ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(middlewares);
 
-        return builder.WithTraefikRoute(traefik, options => options.Host = host);
+        return builder.WithTraefikRoute(traefik, options =>
+        {
+            options.Host = host;
+
+            foreach (var middleware in middlewares)
+            {
+                ArgumentNullException.ThrowIfNull(middleware, nameof(middlewares));
+                options.Middlewares.Add(middleware.Resource);
+            }
+        });
     }
 
     /// <summary>
@@ -75,13 +87,16 @@ public static class TraefikRoutingExtensions
     internal static IResourceBuilder<T> WithTraefikRoutePolyglot<T>(
         this IResourceBuilder<T> builder,
         IResourceBuilder<TraefikResource> traefik,
-        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object host)
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object host,
+        IResourceBuilder<TraefikMiddlewareResource>[]? middlewares = null)
         where T : IResourceWithEndpoints
     {
+        middlewares ??= [];
+
         return host switch
         {
-            string value => builder.WithTraefikRoute(traefik, value),
-            ReferenceExpression expression => builder.WithTraefikRoute(traefik, expression),
+            string value => builder.WithTraefikRoute(traefik, value, middlewares),
+            ReferenceExpression expression => builder.WithTraefikRoute(traefik, expression, middlewares),
             _ => throw new ArgumentException($"Unsupported host type '{host?.GetType().Name}'. Expected a string or a reference expression.", nameof(host)),
         };
     }

@@ -65,6 +65,12 @@ internal static class TraefikDynamicConfiguration
                 router["priority"] = priority;
             }
 
+            if (route.Middlewares.Count > 0)
+            {
+                // Middlewares defined in this same file need no `@file` provider suffix.
+                router["middlewares"] = route.Middlewares.Select(m => m.Name).ToArray();
+            }
+
             if (defaults.Tls && route.Options.EntryPoint is null)
             {
                 // An empty `tls` section enables TLS with the default certificate. No resolver in run mode: see
@@ -86,14 +92,32 @@ internal static class TraefikDynamicConfiguration
             };
         }
 
-        var document = new Dictionary<string, object>();
+        // Every middleware of this Traefik is written, including unused ones, which Traefik accepts.
+        var middlewares = new Dictionary<string, object>();
+        foreach (var middleware in traefik.Middlewares)
+        {
+            middlewares[middleware.Name] = new Dictionary<string, object>
+            {
+                [middleware.Type] = await middleware.Options.ToFileConfigurationAsync(context, cancellationToken).ConfigureAwait(false),
+            };
+        }
+
+        var http = new Dictionary<string, object>();
         if (routers.Count > 0)
         {
-            document["http"] = new Dictionary<string, object>
-            {
-                ["routers"] = routers,
-                ["services"] = services,
-            };
+            http["routers"] = routers;
+            http["services"] = services;
+        }
+
+        if (middlewares.Count > 0)
+        {
+            http["middlewares"] = middlewares;
+        }
+
+        var document = new Dictionary<string, object>();
+        if (http.Count > 0)
+        {
+            document["http"] = http;
         }
 
         var serializer = new SerializerBuilder()

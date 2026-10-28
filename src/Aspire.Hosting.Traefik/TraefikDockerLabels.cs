@@ -61,6 +61,28 @@ internal static class TraefikDockerLabels
             }
         }
 
+        if (route.Middlewares.Count > 0)
+        {
+            // Middlewares are defined on every routed service that uses them, not on Traefik's own service, so the
+            // same labels work for an external Traefik. Traefik accepts identical definitions from several
+            // containers. Within the Docker provider a middleware is referenced without the `@docker` suffix.
+            labels[$"{router}.middlewares"] = string.Join(",", route.Middlewares.Select(m => m.Name));
+
+            foreach (var middleware in route.Middlewares)
+            {
+                var definition = $"traefik.http.middlewares.{middleware.Name}.{middleware.Type}";
+                if (middleware.Options.Count == 0)
+                {
+                    // A middleware with only default options (for example `compress`) is declared with `=true`.
+                    labels[definition] = "true";
+                }
+                else
+                {
+                    middleware.Options.AddLabels(composeService, labels, definition);
+                }
+            }
+        }
+
         // Pin the backend port. Traefik only infers it when the container exposes exactly one port, which isn't
         // true for services with several endpoints.
         labels[$"{loadBalancer}.server.port"] = GetTargetPort(service, route);
@@ -149,5 +171,5 @@ internal static class TraefikDockerLabels
         return string.Format(CultureInfo.InvariantCulture, EscapeLiteral(expression.Format), args);
     }
 
-    private static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
+    internal static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
 }

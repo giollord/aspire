@@ -50,13 +50,56 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         await app.StopAsync(cts.Token);
     }
 
-    private static async Task<HttpResponseMessage> SendWithRetryAsync(HttpClient httpClient, string host, CancellationToken cancellationToken)
+    [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
+    public async Task AppliesMiddlewaresToRoutes()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var headers = traefik.AddMiddleware("tag", "headers")
+            .WithOption("customRequestHeaders.X-Aspire-Middleware", "applied");
+        var strip = traefik.AddMiddleware("strip", "stripPrefix")
+            .WithOption("prefixes", ["/v1"]);
+
+        var whoami = builder.AddContainer("whoami", WhoamiImage)
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"whoami.dev.localhost");
+                route.PathPrefix = "/v1";
+                route.Middlewares.Add(strip.Resource);
+            })
+            .WithTraefikMiddleware(headers);
+
+        await using var app = builder.Build();
+        await app.StartAsync(cts.Token);
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+
+        using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
+
+        using var response = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token, "/v1/test");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // whoami prints the request line and headers it received: the prefix is gone and the header was added.
+        var body = await response.Content.ReadAsStringAsync(cts.Token);
+        Assert.Contains("GET /test HTTP/1.1", body);
+        Assert.Contains("X-Aspire-Middleware: applied", body);
+
+        await app.StopAsync(cts.Token);
+    }
+
+    private static async Task<HttpResponseMessage> SendWithRetryAsync(HttpClient httpClient, string host, CancellationToken cancellationToken, string path = "/")
     {
         // Traefik reports healthy before the file provider has necessarily loaded the dynamic configuration, so
         // the first requests can still get 404.
         while (true)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
             request.Headers.Host = host;
 
             var response = await httpClient.SendAsync(request, cancellationToken);
