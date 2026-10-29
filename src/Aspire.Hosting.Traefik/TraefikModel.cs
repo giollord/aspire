@@ -62,7 +62,18 @@ internal sealed record TraefikEntryPoint(string Name, int TargetPort);
 /// <summary>
 /// Records an HTTP route declared on a routed resource with <c>WithTraefikRoute</c>.
 /// </summary>
-internal sealed record TraefikRouteAnnotation(TraefikResource Traefik, TraefikRouteOptions Options) : IResourceAnnotation;
+/// <param name="Traefik">The Traefik resource that receives the requests.</param>
+/// <param name="Options">The route options.</param>
+/// <param name="IsSignInRoute">
+/// Whether the route was added by <see cref="TraefikRoutingSubscriber"/> to send <c>/oauth2/*</c> on a protected host to
+/// oauth2-proxy. Such routes are recreated whenever the routes are applied.
+/// </param>
+internal sealed record TraefikRouteAnnotation(TraefikResource Traefik, TraefikRouteOptions Options, bool IsSignInRoute = false) : IResourceAnnotation;
+
+/// <summary>
+/// Marks a resource that already joins an external Traefik's shared network because a middleware calls it.
+/// </summary>
+internal sealed record TraefikNetworkAnnotation(string Network) : IResourceAnnotation;
 
 /// <summary>
 /// Records a middleware applied to every route of a resource with <c>WithTraefikMiddleware</c>.

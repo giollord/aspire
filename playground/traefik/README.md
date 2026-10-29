@@ -20,6 +20,8 @@ aspire run
 | `http://app.dev.localhost:8000/v1/hello` | `Traefik.Api` project | A second, path-based route (`PathPrefix(/v1)`) to the same project. |
 | `http://app.dev.localhost:8000/api/` | `Traefik.Api` project | `StripPathPrefix`: the API sees `/`, and `X-Forwarded-Prefix: /api`. |
 | `http://admin.dev.localhost:8000` | `traefik/whoami` container | Basic authentication (`admin` / `admin`, from `Parameters:admin-password`). |
+| `http://secure.dev.localhost:8000` | `traefik/whoami` container | Single sign-on with Keycloak through oauth2-proxy. Sign in as `alice` / `alice`; the echoed request shows the `X-Auth-Request-*` headers. |
+| `http://auth.dev.localhost:8000` | Keycloak | The Keycloak realm `traefik-demo`, imported from `Traefik.AppHost/Realms`. |
 | Traefik resource → **Dashboard** link | Traefik API | The Traefik dashboard with the generated routers and services. |
 
 Middlewares:
@@ -51,5 +53,7 @@ aspire publish -o ./out
 ```
 
 `out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them.
+
+When published, Keycloak and oauth2-proxy use `https://auth.${DOMAIN}` and `https://secure.${DOMAIN}`; the realm's redirect URI follows from `GetTraefikUrl()`.
 
 When published, basic authentication takes an htpasswd entry in the `ADMIN_HTPASSWD` variable instead of a plain password. Create one with `htpasswd -nbB admin <password>`. Docker Compose interpolates `$` in `.env` values, so put it in single quotes there: `ADMIN_HTPASSWD='admin:$2y$05$...'`.

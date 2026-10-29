@@ -137,6 +137,67 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         await app.StopAsync(cts.Token);
     }
 
+    [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
+    public async Task ForwardAuthLetsAuthorizedRequestsThrough()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        // A stub authentication server: 200 with the user in X-User when X-Token is right, 401 otherwise.
+        var authServer = builder.AddContainer("auth-server", "docker.io/library/nginx", "1.27-alpine")
+            .WithHttpEndpoint(targetPort: 80)
+            .WithContainerFiles("/etc/nginx/conf.d", [new ContainerFile
+            {
+                Name = "default.conf",
+                Contents = """
+                    server {
+                        listen 80;
+                        location /verify {
+                            if ($http_x_token = "secret") {
+                                add_header X-User alice;
+                                return 200;
+                            }
+                            return 401;
+                        }
+                    }
+                    """,
+            }]);
+
+        var check = traefik.AddForwardAuth("check", authServer.GetEndpoint("http"), "/verify",
+            options => options.AuthResponseHeaders.Add("X-User"));
+
+        var whoami = builder.AddContainer("whoami", WhoamiImage)
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, "whoami.dev.localhost")
+            .WithTraefikMiddleware(check);
+
+        await using var app = builder.Build();
+        await app.StartAsync(cts.Token);
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(authServer.Resource.Name, KnownResourceStates.Running, cts.Token);
+
+        using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
+
+        using var anonymous = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/");
+        request.Headers.Host = "whoami.dev.localhost";
+        request.Headers.Add("X-Token", "secret");
+        using var authorized = await httpClient.SendAsync(request, cts.Token);
+        Assert.Equal(HttpStatusCode.OK, authorized.StatusCode);
+
+        var body = await authorized.Content.ReadAsStringAsync(cts.Token);
+        Assert.Contains("X-User: alice", body);
+
+        await app.StopAsync(cts.Token);
+    }
+
     private static async Task<HttpResponseMessage> SendWithRetryAsync(HttpClient httpClient, string host, CancellationToken cancellationToken, string path = "/")
     {
         // Traefik reports healthy before the file provider has necessarily loaded the dynamic configuration, so

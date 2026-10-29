@@ -11,6 +11,7 @@
   <ItemGroup>
     <AspireProjectOrPackageReference Include="Aspire.Hosting.AppHost" />
     <AspireProjectOrPackageReference Include="Aspire.Hosting.Docker" />
+    <AspireProjectOrPackageReference Include="Aspire.Hosting.Keycloak" />
     <AspireProjectOrPackageReference Include="Aspire.Hosting.Traefik" />
     <ProjectReference Include="..\Traefik.Api\Traefik.Api.csproj" />
   </ItemGroup>

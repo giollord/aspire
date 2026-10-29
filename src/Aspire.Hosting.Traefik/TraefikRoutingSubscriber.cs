@@ -42,6 +42,8 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             traefik.Routes.Clear();
         }
 
+        AddSignInRoutes(model);
+
         // Traefik matches router names case-sensitively in the file provider, but Docker label keys are compared
         // case-insensitively by some tooling, so treat names that differ only by case as duplicates.
         var routerNames = new Dictionary<string, IResource>(StringComparer.OrdinalIgnoreCase);
@@ -108,6 +110,21 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 }
             }
 
+            if (publishesToDockerCompose)
+            {
+                var middlewares = routes.SelectMany(r => r.Middlewares).SelectMany(m => m.WithReferences()).Distinct().ToList();
+
+                if (resource is IResourceWithEnvironment resourceWithEnvironment)
+                {
+                    TraefikDockerLabels.AddMiddlewareValueProbes(resourceWithEnvironment, middlewares);
+                }
+
+                // After the route customizations above, which read the probes.
+                resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation((_, service) => TraefikDockerLabels.RemoveProbes(service)));
+
+                JoinExternalNetwork(model, middlewares);
+            }
+
             if (!isPublishMode)
             {
                 AddPublicUrls(resource, routes);
@@ -124,6 +141,25 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     resource.Annotations.Add(new ResourceRelationshipAnnotation(middleware, "Middleware"));
                 }
             }
+        }
+
+        SetErrorPageServices(model);
+    }
+
+    private static void SetErrorPageServices(DistributedApplicationModel model)
+    {
+        foreach (var middleware in model.Resources.OfType<TraefikMiddlewareResource>())
+        {
+            if (middleware.ErrorPageResource is not { } errorPages)
+            {
+                continue;
+            }
+
+            // The service of a route has the router's name. The first route of the resource is used.
+            var route = middleware.Parent.Routes.FirstOrDefault(r => r.Resource == errorPages)
+                ?? throw new InvalidOperationException($"The Traefik middleware '{middleware.Name}' serves error pages from '{errorPages.Name}', which has no route through '{middleware.Parent.Name}'. Call WithTraefikRoute on it.");
+
+            middleware.Options.Set("service", route.RouterName);
         }
     }
 
@@ -162,6 +198,98 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         }
 
         return middlewares;
+    }
+
+    /// <summary>
+    /// Routes <c>/oauth2/*</c> on every host protected by an oauth2-proxy middleware to the oauth2-proxy container.
+    /// </summary>
+    /// <remarks>
+    /// The provider redirects the browser back to <c>/oauth2/callback</c> on the host the user first requested, so that
+    /// path must reach oauth2-proxy rather than the protected backend, and without passing through the middleware.
+    /// </remarks>
+    private static void AddSignInRoutes(DistributedApplicationModel model)
+    {
+        foreach (var resource in model.Resources)
+        {
+            foreach (var generated in resource.Annotations.OfType<TraefikRouteAnnotation>().Where(a => a.IsSignInRoute).ToList())
+            {
+                resource.Annotations.Remove(generated);
+            }
+
+            if (resource is TraefikMiddlewareResource middleware)
+            {
+                middleware.ProtectedHosts.Clear();
+            }
+        }
+
+        foreach (var resource in model.Resources.ToList())
+        {
+            var resourceMiddlewares = resource.Annotations.OfType<TraefikMiddlewareAnnotation>().Select(a => a.Middleware).ToList();
+
+            foreach (var annotation in resource.Annotations.OfType<TraefikRouteAnnotation>().ToList())
+            {
+                var middlewares = resourceMiddlewares
+                    .Where(m => m.Parent == annotation.Traefik)
+                    .Concat(annotation.Options.Middlewares)
+                    .SelectMany(m => m.WithReferences())
+                    .Where(m => m.OAuth2Proxy is not null)
+                    .Distinct();
+
+                foreach (var middleware in middlewares)
+                {
+                    if (annotation.Options.Host is not { } host)
+                    {
+                        throw new InvalidOperationException($"A Traefik route of resource '{resource.Name}' uses the oauth2-proxy middleware '{middleware.Name}', but has no host. The sign-in callback needs one.");
+                    }
+
+                    // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once.
+                    if (middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
+                    {
+                        continue;
+                    }
+
+                    middleware.ProtectedHosts.Add(host);
+                    middleware.OAuth2Proxy!.Annotations.Add(new TraefikRouteAnnotation(annotation.Traefik, new TraefikRouteOptions
+                    {
+                        Host = host,
+                        PathPrefix = "/oauth2",
+                        Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
+                        EntryPoint = annotation.Options.EntryPoint,
+                        RouterName = $"{middleware.OAuth2Proxy.Name}-{middleware.ProtectedHosts.Count}",
+                    }, IsSignInRoute: true));
+                }
+            }
+        }
+    }
+
+    private static void JoinExternalNetwork(DistributedApplicationModel model, List<TraefikMiddlewareResource> middlewares)
+    {
+        // An external Traefik reaches the services a middleware calls, such as a forward authentication server, over
+        // its shared network, so those services join it too. Routed services join it in TraefikDockerLabels.
+        foreach (var middleware in middlewares)
+        {
+            if (((ITraefikRouteTarget)middleware.Parent).GetRouteDefaults(isPublishMode: true).Network is not { } network)
+            {
+                continue;
+            }
+
+            foreach (var referenced in middleware.Options.GetReferencedResources())
+            {
+                if (!model.Resources.Contains(referenced) || referenced.Annotations.OfType<TraefikNetworkAnnotation>().Any(a => a.Network == network))
+                {
+                    continue;
+                }
+
+                referenced.Annotations.Add(new TraefikNetworkAnnotation(network));
+                referenced.Annotations.Add(new DockerComposeServiceCustomizationAnnotation((_, service) =>
+                {
+                    if (!service.Networks.Contains(network))
+                    {
+                        service.Networks.Add(network);
+                    }
+                }));
+            }
+        }
     }
 
     private static void AddPublicUrls(IResource resource, List<TraefikRoute> routes)

@@ -420,6 +420,39 @@ public static class TraefikMiddlewareTypesExtensions
     }
 
     /// <summary>
+    /// Adds an <c>errors</c> middleware, which replaces error responses of the backend with pages served by another
+    /// resource.
+    /// </summary>
+    /// <typeparam name="T">The type of the resource that serves the error pages.</typeparam>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="name">The name of the middleware.</param>
+    /// <param name="status">The status codes or ranges to replace, for example <c>500-599</c> or <c>404</c>.</param>
+    /// <param name="errorPages">The resource that serves the pages. It needs a route through the same Traefik, whose service is used.</param>
+    /// <param name="query">The path requested from <paramref name="errorPages"/>, where <c>{status}</c> is the status code, for example <c>/{status}.html</c>.</param>
+    /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/errorpages/"/>.</remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikMiddlewareResource> AddErrorPages<T>(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string[] status, IResourceBuilder<T> errorPages, string query = "/{status}.html")
+        where T : IResourceWithEndpoints
+    {
+        RequireItems(status, nameof(status));
+        ArgumentNullException.ThrowIfNull(errorPages);
+        ArgumentException.ThrowIfNullOrEmpty(query);
+
+        if (!query.StartsWith('/'))
+        {
+            throw new ArgumentException($"The query '{query}' must start with '/'.", nameof(query));
+        }
+
+        var middleware = builder.AddMiddleware(name, "errors")
+            .WithOption("status", status)
+            .WithOption("query", query);
+        middleware.Resource.ErrorPageResource = errorPages.Resource;
+
+        return middleware;
+    }
+
+    /// <summary>
     /// Adds a <c>basicAuth</c> middleware that accepts the users of <c>htpasswd</c> entries.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>

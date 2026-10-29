@@ -120,9 +120,9 @@ public static class TraefikBuilderExtensions
                     foreach (var middleware in resource.Middlewares)
                     {
                         var index = 0;
-                        foreach (var expression in middleware.Options.GetExpressions().Where(ReferencesEndpoint))
+                        foreach (var expression in middleware.Options.GetEndpointExpressions())
                         {
-                            context.EnvironmentVariables[$"ASPIRE_TRAEFIK_MIDDLEWARE_{TraefikNames.ToEnvironmentName(middleware.Name)}_{++index}"] = expression;
+                            context.EnvironmentVariables[TraefikDockerLabels.GetMiddlewareValueVariableName(middleware, ++index)] = expression;
                         }
                     }
                 })
@@ -138,14 +138,6 @@ public static class TraefikBuilderExtensions
 
         return traefik;
     }
-
-    private static bool ReferencesEndpoint(ReferenceExpression expression) =>
-        expression.ValueProviders.Any(provider => provider switch
-        {
-            EndpointReference or EndpointReferenceExpression => true,
-            ReferenceExpression nested => ReferencesEndpoint(nested),
-            _ => false,
-        });
 
     /// <summary>
     /// Sets the host port of the <c>web</c> entry point instead of using a randomly assigned port in run mode or port 80

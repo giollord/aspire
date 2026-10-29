@@ -73,11 +73,14 @@ internal static class TraefikDockerLabels
                 {
                     // A middleware with only default options (for example `compress`) is declared with `=true`.
                     labels[definition] = "true";
+                    continue;
                 }
-                else
-                {
-                    middleware.Options.AddLabels(composeService, labels, definition);
-                }
+
+                var probes = GetMiddlewareValueProbes(middleware);
+                middleware.Options.AddLabels(labels, definition, expression =>
+                    probes.TryGetValue(expression, out var variable) && service.Environment.TryGetValue(variable, out var resolved)
+                        ? resolved
+                        : ToComposeExpression(composeService, expression));
             }
         }
 
@@ -128,6 +131,59 @@ internal static class TraefikDockerLabels
             context.EnvironmentVariables[name] = route.Endpoint.Property(EndpointProperty.TargetPort);
         }));
     }
+
+    /// <summary>
+    /// Gets the name of the environment variable that carries a middleware option referencing an endpoint, such as a
+    /// forward authentication address. In run mode Traefik itself gets these variables (see <c>AddTraefik</c>); at
+    /// publish time the routed services do (see <see cref="AddMiddlewareValueProbes"/>).
+    /// </summary>
+    internal static string GetMiddlewareValueVariableName(TraefikMiddlewareResource middleware, int index) =>
+        FormattableString.Invariant($"{MiddlewareValueVariablePrefix}{TraefikNames.ToEnvironmentName(middleware.Name)}_{index}");
+
+    /// <summary>
+    /// Adds environment variables to the routed resource whose values are the middleware options that reference
+    /// endpoints, for example <c>http://sso-proxy:4180/</c>.
+    /// </summary>
+    /// <remarks>
+    /// As with <see cref="AddTargetPortProbe"/>, the Docker Compose publisher's mapping from an endpoint to a service
+    /// address isn't public, but it resolves endpoint references in environment variables. <see cref="Apply"/> reads the
+    /// values back into the labels, and <see cref="RemoveProbes"/> removes the variables afterwards.
+    /// </remarks>
+    internal static void AddMiddlewareValueProbes(IResourceWithEnvironment resource, IEnumerable<TraefikMiddlewareResource> middlewares)
+    {
+        var probes = middlewares.SelectMany(GetMiddlewareValueProbes).ToList();
+        if (probes.Count == 0)
+        {
+            return;
+        }
+
+        resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
+        {
+            foreach (var (expression, variable) in probes)
+            {
+                context.EnvironmentVariables[variable] = expression;
+            }
+        }));
+    }
+
+    /// <summary>
+    /// Removes the middleware value variables once every route of the service has its labels.
+    /// </summary>
+    internal static void RemoveProbes(Service service)
+    {
+        foreach (var name in service.Environment.Keys.Where(k => k.StartsWith(MiddlewareValueVariablePrefix, StringComparison.Ordinal)).ToList())
+        {
+            service.Environment.Remove(name);
+        }
+    }
+
+    private const string MiddlewareValueVariablePrefix = "ASPIRE_TRAEFIK_MIDDLEWARE_";
+
+    private static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
+        middleware.Options.GetEndpointExpressions()
+            .Select((expression, i) => (expression, variable: GetMiddlewareValueVariableName(middleware, i + 1)))
+            // Options hold the expression objects themselves, so they are matched by reference.
+            .ToDictionary(p => p.expression, p => p.variable, (IEqualityComparer<ReferenceExpression>)ReferenceEqualityComparer.Instance);
 
     private static string GetTargetPort(Service service, TraefikRoute route)
     {

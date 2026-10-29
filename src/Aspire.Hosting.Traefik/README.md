@@ -100,7 +100,8 @@ api.WithTraefikMiddleware(defaults, cors, traefik.AddRateLimit("rate", average: 
 | `AddHeaders`, `AddSecurityHeaders` | `headers` (custom headers, CORS, security headers) |
 | `AddBasicAuth` | `basicAuth` |
 | `AddIpAllowList`, `AddRateLimit`, `AddInFlightRequestLimit` | Access and load limits |
-| `AddCompress`, `AddRetry`, `AddCircuitBreaker`, `AddBuffering` | Responses and resilience |
+| `AddCompress`, `AddRetry`, `AddCircuitBreaker`, `AddBuffering`, `AddErrorPages` | Responses and resilience |
+| `AddForwardAuth`, `AddOAuth2ProxyForwardAuth`, `AddKeycloakForwardAuth` | `forwardAuth` |
 | `AddChain` | `chain` |
 
 ### Basic authentication
@@ -108,6 +109,55 @@ api.WithTraefikMiddleware(defaults, cors, traefik.AddRateLimit("rate", average: 
 `AddBasicAuth` takes one parameter per user, each holding an `htpasswd` entry (`htpasswd -nbB admin <password>`). This works in run mode and when published, and the plain password stays out of the deployment. Docker Compose interpolates `$` in `.env` values, which bcrypt hashes contain, so write the value in single quotes there: `ADMIN_HTPASSWD='admin:$2y$05$...'`.
 
 For local development, `AddBasicAuth(name, user, passwordParameter)` takes a plain password and hashes it with SHA1. It throws when publishing.
+
+### Forward authentication
+
+`AddForwardAuth` asks an authentication server whether each request may pass: a `2xx` answer lets it through, anything else (for example a redirect to a sign-in page) goes back to the client. The server can be a resource of the application; its address is resolved from Traefik's point of view in run mode and becomes the service address when published.
+
+```csharp
+var authServer = builder.AddProject<Projects.AuthServer>("auth-server");
+
+var check = traefik.AddForwardAuth("check", authServer.GetEndpoint("http"), "/verify",
+    options => options.AuthResponseHeaders.Add("X-User"));
+
+api.WithTraefikMiddleware(check);
+```
+
+### Single sign-on with OpenID Connect
+
+`AddOAuth2ProxyForwardAuth` adds an [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) container that signs users in with any OpenID Connect provider. `AddKeycloakForwardAuth` does the same for a Keycloak resource routed through Traefik:
+
+```csharp
+var clientSecret = builder.AddParameter("sso-client-secret", secret: true);
+
+var keycloak = builder.AddKeycloak("keycloak")
+    .WithoutHttpsCertificate()
+    .WithRealmImport("./Realms")
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"auth.{domain}"));
+
+var sso = traefik.AddKeycloakForwardAuth("sso", keycloak, realm: "demo", clientId: "oauth2-proxy", clientSecret);
+
+builder.AddProject<Projects.Admin>("admin")
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"admin.{domain}"))
+    .WithTraefikMiddleware(sso);
+```
+
+- Users without a session are redirected to the provider. Every protected host gets a route for `/oauth2/*` to oauth2-proxy, which receives the sign-in callback.
+- Register `<public URL of each protected host>/oauth2/callback` as a redirect URI with the provider; `GetTraefikUrl()` builds it. Keycloak clients also need an audience mapper for the client ID.
+- The backend receives the user in `X-Auth-Request-User`, `X-Auth-Request-Email`, `X-Auth-Request-Preferred-Username`, and `X-Auth-Request-Groups`.
+- `AddKeycloakForwardAuth` sets `KC_HOSTNAME` to Keycloak's public URL (plus `KC_HOSTNAME_BACKCHANNEL_DYNAMIC`, `KC_PROXY_HEADERS`, and `KC_HTTP_ENABLED`), so tokens carry the public issuer while oauth2-proxy talks to Keycloak's internal endpoint. The package doesn't reference the Keycloak integration; any resource with endpoints can be passed.
+
+### Error pages
+
+`AddErrorPages` replaces error responses with pages from another resource that has a route through the same Traefik:
+
+```csharp
+var pages = builder.AddContainer("error-pages", "nginx")
+    .WithHttpEndpoint(targetPort: 80)
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"errors.{domain}"));
+
+api.WithTraefikMiddleware(traefik.AddErrorPages("errors", ["500-599"], pages, "/{status}.html"));
+```
 
 ### Other middlewares
 

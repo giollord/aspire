@@ -50,6 +50,30 @@ builder.AddContainer("whoami", "traefik/whoami", "v1.11")
     .WithTraefikRoute(traefik, ReferenceExpression.Create($"admin.{domain}"), adminAuth)
     .WithTraefikMiddleware(defaults);
 
+// Single sign-on: Keycloak behind Traefik at auth.<domain>, and secure.<domain> only for users signed in to its realm.
+// AddKeycloakForwardAuth runs oauth2-proxy between them and sets Keycloak's hostname to its public URL.
+var clientSecret = builder.AddParameter("sso-client-secret", secret: true);
+
+#pragma warning disable ASPIRECERTIFICATES001 // WithoutHttpsCertificate is experimental.
+var keycloak = builder.AddKeycloak("keycloak")
+    // Plain HTTP inside the application: Traefik is the only entry point.
+    .WithoutHttpsCertificate()
+    .WithRealmImport("./Realms")
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"auth.{domain}"));
+#pragma warning restore ASPIRECERTIFICATES001
+
+var sso = traefik.AddKeycloakForwardAuth("sso", keycloak, realm: "traefik-demo", clientId: "oauth2-proxy", clientSecret);
+
+var secure = builder.AddContainer("secure", "traefik/whoami", "v1.11")
+    .WithHttpEndpoint(targetPort: 80)
+    .WithTraefikRoute(traefik, ReferenceExpression.Create($"secure.{domain}"))
+    .WithTraefikMiddleware(sso);
+
+// Placeholders resolved by Keycloak while importing Realms/traefik-demo-realm.json.
+keycloak
+    .WithEnvironment("TRAEFIK_DEMO_CLIENT_SECRET", clientSecret)
+    .WithEnvironment("TRAEFIK_DEMO_REDIRECT_URI", ReferenceExpression.Create($"{secure.GetTraefikUrl()}/oauth2/callback"));
+
 // A project backend, running on the host and reached from the Traefik container.
 var api = builder.AddProject<Projects.Traefik_Api>("api")
     .WithTraefikRoute(traefik, ReferenceExpression.Create($"api.{domain}"))

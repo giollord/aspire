@@ -4,7 +4,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Docker;
 
 namespace Aspire.Hosting.Traefik;
 
@@ -143,7 +142,10 @@ internal sealed partial class TraefikOptionMap
     /// </code>
     /// See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/other-providers/docker/"/>.
     /// </remarks>
-    public void AddLabels(DockerComposeServiceResource composeService, IDictionary<string, string> labels, string prefix)
+    /// <param name="labels">The labels to add to.</param>
+    /// <param name="prefix">The label key of the tree, for example <c>traefik.http.middlewares.strip.stripPrefix</c>.</param>
+    /// <param name="renderExpression">Renders an expression for Docker Compose.</param>
+    public void AddLabels(IDictionary<string, string> labels, string prefix, Func<ReferenceExpression, string> renderExpression)
     {
         foreach (var (key, value) in _entries)
         {
@@ -151,18 +153,18 @@ internal sealed partial class TraefikOptionMap
 
             if (value is TraefikOptionMap map)
             {
-                map.AddLabels(composeService, labels, label);
+                map.AddLabels(labels, label, renderExpression);
                 continue;
             }
 
             labels[label] = value switch
             {
-                IReadOnlyList<object> list => string.Join(",", list.Select(item => ToListItem(composeService, label, item))),
-                _ => ToLabelValue(composeService, value),
+                IReadOnlyList<object> list => string.Join(",", list.Select(item => ToListItem(label, item, renderExpression))),
+                _ => ToLabelValue(value, renderExpression),
             };
         }
 
-        static string ToListItem(DockerComposeServiceResource composeService, string label, object item)
+        static string ToListItem(string label, object item, Func<ReferenceExpression, string> renderExpression)
         {
             // The Docker provider splits list values on commas, and there is no escape for a comma inside an item.
             if (item is string text && text.Contains(','))
@@ -170,16 +172,39 @@ internal sealed partial class TraefikOptionMap
                 throw new InvalidOperationException($"The value '{text}' of the Traefik option '{label}' contains ',', which Docker labels use to separate list items.");
             }
 
-            return ToLabelValue(composeService, item);
+            return ToLabelValue(item, renderExpression);
         }
     }
 
-    private static string ToLabelValue(DockerComposeServiceResource composeService, object value) => value switch
+    /// <summary>
+    /// Gets the expressions in the tree that reference an endpoint, such as a forward authentication address, in a
+    /// stable order.
+    /// </summary>
+    public IEnumerable<ReferenceExpression> GetEndpointExpressions() => GetExpressions().Where(ReferencesEndpoint);
+
+    /// <summary>
+    /// Gets the resources whose endpoints the tree references.
+    /// </summary>
+    public IEnumerable<IResource> GetReferencedResources() =>
+        GetEndpointExpressions().SelectMany(GetEndpointResources).Distinct();
+
+    internal static bool ReferencesEndpoint(ReferenceExpression expression) => GetEndpointResources(expression).Any();
+
+    private static IEnumerable<IResource> GetEndpointResources(ReferenceExpression expression) =>
+        expression.ValueProviders.SelectMany(provider => provider switch
+        {
+            EndpointReference endpoint => [endpoint.Resource],
+            EndpointReferenceExpression property => [property.Endpoint.Resource],
+            ReferenceExpression nested => GetEndpointResources(nested),
+            _ => Enumerable.Empty<IResource>(),
+        });
+
+    private static string ToLabelValue(object value, Func<ReferenceExpression, string> renderExpression) => value switch
     {
         string text => TraefikDockerLabels.EscapeLiteral(text),
         bool flag => flag ? "true" : "false",
         long number => number.ToString(CultureInfo.InvariantCulture),
-        ReferenceExpression expression => TraefikDockerLabels.ToComposeExpression(composeService, expression),
+        ReferenceExpression expression => renderExpression(expression),
         _ => throw new InvalidOperationException($"Unsupported Traefik option value '{value}'."),
     };
 

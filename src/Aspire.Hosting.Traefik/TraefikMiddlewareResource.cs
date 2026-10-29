@@ -58,6 +58,23 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     internal List<TraefikMiddlewareResource> References { get; } = [];
 
     /// <summary>
+    /// Gets the oauth2-proxy container this middleware forwards to, when it was added with <c>AddOAuth2ProxyForwardAuth</c>.
+    /// Routes that use such a middleware also get a sign-in route to the container.
+    /// </summary>
+    internal ContainerResource? OAuth2Proxy { get; set; }
+
+    /// <summary>
+    /// Gets the hosts of the routes that use this middleware. Populated by <see cref="TraefikRoutingSubscriber"/>.
+    /// </summary>
+    internal List<ReferenceExpression> ProtectedHosts { get; } = [];
+
+    /// <summary>
+    /// Gets the resource that serves the error pages of an <c>errors</c> middleware. Its Traefik service name is only
+    /// known once the routes are applied, so <see cref="TraefikRoutingSubscriber"/> sets the <c>service</c> option.
+    /// </summary>
+    internal IResource? ErrorPageResource { get; set; }
+
+    /// <summary>
     /// Gets this middleware followed by every middleware it refers to, directly or through other middlewares.
     /// </summary>
     internal IEnumerable<TraefikMiddlewareResource> WithReferences()
