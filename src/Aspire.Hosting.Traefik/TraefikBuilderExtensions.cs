@@ -941,20 +941,24 @@ public static partial class TraefikBuilderExtensions
     /// <summary>
     /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point.
     /// </summary>
+    /// <remarks>
+    /// The alternative names are reference expressions only, such as <c>refExpr`*.${domain}`</c>: ATS has no arrays of
+    /// unions, and a union on an <c>object[]</c> parameter is exported as a single value.
+    /// </remarks>
     [AspireExport("withTlsDomain")]
     internal static IResourceBuilder<TraefikResource> WithTlsDomainPolyglot(
         this IResourceBuilder<TraefikResource> builder,
         [AspireUnion(typeof(string), typeof(ReferenceExpression))] object main,
-        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object[]? sans = null)
+        ReferenceExpression[]? sans = null)
     {
-        return builder.WithTlsDomain(ToExpression(main, nameof(main)), [.. (sans ?? []).Select(san => ToExpression(san, nameof(sans)))]);
-
-        static ReferenceExpression ToExpression(object value, string parameterName) => value switch
+        var mainExpression = main switch
         {
             string text => ReferenceExpression.Create($"{text}"),
             ReferenceExpression expression => expression,
-            _ => throw new ArgumentException($"Unsupported type '{value?.GetType().Name}'. Expected a string or a reference expression.", parameterName),
+            _ => throw new ArgumentException($"Unsupported type '{main?.GetType().Name}'. Expected a string or a reference expression.", nameof(main)),
         };
+
+        return builder.WithTlsDomain(mainExpression, sans ?? []);
     }
 
     /// <summary>
