@@ -67,7 +67,7 @@ traefik.WithDashboard(ReferenceExpression.Create($"traefik.{domain}"), adminAuth
 
 // An entry-point middleware applies to every router on the entry point, including the dashboard and sign-in routes.
 var enableHttps = builder.Configuration.GetValue<bool>("Traefik:EnableHttps");
-traefik.WithEntryPointMiddleware(enableHttps ? "websecure" : "web",
+traefik.WithEntryPointMiddleware(enableHttps ? TraefikResource.WebSecureEntryPointName : TraefikResource.WebEntryPointName,
     traefik.AddHeaders("served-by", headers => headers.CustomResponseHeaders["X-Served-By"] = "aspire-traefik"));
 
 // A container backend, reached by its name on the container network. admin.<domain> is the same backend behind

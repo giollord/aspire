@@ -9,6 +9,8 @@ namespace Aspire.Hosting;
 
 public static partial class TraefikBuilderExtensions
 {
+    private const string DefaultLetsEncryptResolverName = "letsencrypt";
+
     /// <summary>
     /// Enables HTTPS with certificates issued by Let's Encrypt.
     /// </summary>
@@ -41,7 +43,7 @@ public static partial class TraefikBuilderExtensions
     /// </para>
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withLetsEncrypt export, which accepts a string, a parameter, or a reference expression.")]
-    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, string email, string resolverName = "letsencrypt", TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
+    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, string email, string resolverName = DefaultLetsEncryptResolverName, TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(email);
@@ -51,7 +53,7 @@ public static partial class TraefikBuilderExtensions
 
     /// <inheritdoc cref="WithLetsEncrypt(IResourceBuilder{TraefikResource}, string, string, TraefikAcmeChallenge, bool)"/>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withLetsEncrypt export, which accepts a string, a parameter, or a reference expression.")]
-    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, IResourceBuilder<ParameterResource> email, string resolverName = "letsencrypt", TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
+    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, IResourceBuilder<ParameterResource> email, string resolverName = DefaultLetsEncryptResolverName, TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(email);
@@ -70,7 +72,7 @@ public static partial class TraefikBuilderExtensions
     /// </code>
     /// </example>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withLetsEncrypt export, which accepts a string, a parameter, or a reference expression.")]
-    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, ReferenceExpression email, string resolverName = "letsencrypt", TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
+    public static IResourceBuilder<TraefikResource> WithLetsEncrypt(this IResourceBuilder<TraefikResource> builder, ReferenceExpression email, string resolverName = DefaultLetsEncryptResolverName, TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn, bool staging = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(email);
@@ -269,7 +271,7 @@ public static partial class TraefikBuilderExtensions
     internal static IResourceBuilder<TraefikResource> WithLetsEncryptPolyglot(
         this IResourceBuilder<TraefikResource> builder,
         [AspireUnion(typeof(string), typeof(IResourceBuilder<ParameterResource>), typeof(ReferenceExpression))] object email,
-        string resolverName = "letsencrypt",
+        string resolverName = DefaultLetsEncryptResolverName,
         TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn,
         bool staging = false)
     {

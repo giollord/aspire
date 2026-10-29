@@ -23,7 +23,22 @@ internal sealed record TraefikTransportRoute(
     TraefikTcpRouteOptions? Tcp)
 {
     /// <summary>
+    /// The configuration section and label namespace of TCP routes.
+    /// </summary>
+    public const string TcpProtocol = "tcp";
+
+    /// <summary>
+    /// The configuration section and label namespace of UDP routes.
+    /// </summary>
+    public const string UdpProtocol = "udp";
+
+    /// <summary>
     /// Gets the configuration section of the route: <c>tcp</c> or <c>udp</c>.
     /// </summary>
-    public string Protocol => Tcp is null ? "udp" : "tcp";
+    public string Protocol => GetProtocol(Tcp);
+
+    /// <summary>
+    /// Gets the protocol of a route from its TCP options, which only TCP routes have.
+    /// </summary>
+    public static string GetProtocol(TraefikTcpRouteOptions? tcp) => tcp is null ? UdpProtocol : TcpProtocol;
 }

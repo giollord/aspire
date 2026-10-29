@@ -23,8 +23,20 @@ namespace Aspire.Hosting.ApplicationModel;
 [AspireExport]
 public class TraefikResource(string name) : ContainerResource(name), IResourceWithServiceDiscovery, ITraefikRouteTarget
 {
-    internal const string WebEntryPointName = "web";
-    internal const string WebSecureEntryPointName = "websecure";
+    /// <summary>
+    /// The name of the plain HTTP entry point, which every managed Traefik has. Use it where an entry point is named,
+    /// such as <see cref="TraefikRouteOptions.EntryPoint"/> or <c>WithEntryPointMiddleware</c>.
+    /// </summary>
+    public const string WebEntryPointName = "web";
+
+    /// <summary>
+    /// The name of the HTTPS entry point, which a managed Traefik has once <c>WithLetsEncrypt</c> is called. Use it
+    /// where an entry point is named, such as <see cref="TraefikRouteOptions.EntryPoint"/> or
+    /// <c>WithEntryPointMiddleware</c>.
+    /// </summary>
+    public const string WebSecureEntryPointName = "websecure";
+
+    // The entry point of Traefik's API, dashboard, and ping endpoint. It isn't meant for routes, so it stays internal.
     internal const string TraefikEntryPointName = "traefik";
 
     internal const int WebTargetPort = 80;

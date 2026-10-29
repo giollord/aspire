@@ -29,6 +29,13 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal static class TraefikDockerLabels
 {
+    // Routed services opt in with this label, because Traefik's Docker provider is started with exposedByDefault=false.
+    private const string EnableLabel = "traefik.enable";
+
+    private const string TargetPortVariablePrefix = "ASPIRE_TRAEFIK_TARGET_PORT_";
+
+    private const string MiddlewareValueVariablePrefix = "ASPIRE_TRAEFIK_MIDDLEWARE_";
+
     /// <summary>
     /// Writes the labels of an HTTP route: its router, its service, and the middlewares it uses.
     /// </summary>
@@ -38,7 +45,7 @@ internal static class TraefikDockerLabels
         var router = $"traefik.http.routers.{route.RouterName}";
         var loadBalancer = $"traefik.http.services.{route.RouterName}.loadbalancer";
 
-        labels["traefik.enable"] = "true";
+        labels[EnableLabel] = "true";
         labels[$"{router}.rule"] = ToComposeExpression(composeService, TraefikRouteRule.Build(route.Options));
         labels[$"{router}.entrypoints"] = route.Options.EntryPoint ?? ToComposeExpression(composeService, defaults.EntryPoint);
         labels[$"{router}.service"] = route.RouterName;
@@ -105,7 +112,7 @@ internal static class TraefikDockerLabels
             labels[$"{loadBalancer}.server.scheme"] = "h2c";
         }
 
-        TraefikLoadBalancer.AddLabels(labels, loadBalancer, TraefikLoadBalancer.GetOptions(route));
+        TraefikLoadBalancer.AddLabels(labels, loadBalancer, TraefikLoadBalancer.Build(route));
 
         JoinNetwork(service, defaults);
     }
@@ -128,7 +135,7 @@ internal static class TraefikDockerLabels
         var labels = service.Labels;
         var router = $"traefik.{route.Protocol}.routers.{route.RouterName}";
 
-        labels["traefik.enable"] = "true";
+        labels[EnableLabel] = "true";
 
         if (route.Tcp is { } tcp)
         {
@@ -187,7 +194,7 @@ internal static class TraefikDockerLabels
     /// publisher to the labels. See <see cref="AddTargetPortProbe"/>.
     /// </summary>
     internal static string GetTargetPortVariableName(TraefikRoute route) =>
-        $"ASPIRE_TRAEFIK_TARGET_PORT_{TraefikNames.ToEnvironmentName(route.RouterName)}";
+        $"{TargetPortVariablePrefix}{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
     /// <inheritdoc cref="GetTargetPortVariableName(TraefikRoute)"/>
     /// <remarks>
@@ -195,7 +202,7 @@ internal static class TraefikDockerLabels
     /// an HTTP router's.
     /// </remarks>
     internal static string GetTargetPortVariableName(TraefikTransportRoute route) =>
-        $"ASPIRE_TRAEFIK_TARGET_PORT_{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}";
+        $"{TargetPortVariablePrefix}{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
     /// <summary>
     /// Adds an environment variable to the routed resource whose value is the target port of the route's endpoint.
@@ -259,8 +266,6 @@ internal static class TraefikDockerLabels
             service.Environment.Remove(name);
         }
     }
-
-    private const string MiddlewareValueVariablePrefix = "ASPIRE_TRAEFIK_MIDDLEWARE_";
 
     /// <summary>
     /// Gets the temporary environment variable that carries each endpoint-referencing value of a middleware's options.

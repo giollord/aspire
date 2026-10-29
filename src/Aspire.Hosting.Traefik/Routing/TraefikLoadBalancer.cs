@@ -10,8 +10,8 @@ namespace Aspire.Hosting.Traefik;
 /// Builds the options of the load balancer behind an HTTP route, apart from its servers.
 /// </summary>
 /// <remarks>
-/// The options are built once, keyed as in the file provider, and written either as YAML (run mode) or flattened into
-/// lowercase labels (publish):
+/// The load balancer is built once, as the file provider's model, and written either as YAML (run mode) or flattened
+/// into lowercase labels (publish):
 /// <code>
 /// loadBalancer:                          traefik.http.services.api.loadbalancer.passhostheader: "false"
 ///   passHostHeader: false                traefik.http.services.api.loadbalancer.sticky.cookie.name: affinity
@@ -27,76 +27,38 @@ namespace Aspire.Hosting.Traefik;
 internal static class TraefikLoadBalancer
 {
     /// <summary>
-    /// Gets the load balancer options of a route other than its servers, in the casing of the file provider. Options the
-    /// route doesn't set are left out, so Traefik's defaults apply.
+    /// Builds the load balancer of a route without its servers. Options the route doesn't set are left out, so
+    /// Traefik's defaults apply.
     /// </summary>
-    public static Dictionary<string, object> GetOptions(TraefikRoute route)
-    {
-        var options = new Dictionary<string, object>();
-
-        if (route.Options.PassHostHeader is bool passHostHeader)
+    public static TraefikFileModel.HttpLoadBalancer Build(TraefikRoute route) =>
+        new()
         {
-            options["passHostHeader"] = passHostHeader;
-        }
-
-        if (route.Options.StickySession is { } sticky)
-        {
-            var cookie = new Dictionary<string, object>();
-            if (sticky.CookieName is { } name)
-            {
-                cookie["name"] = name;
-            }
-
-            cookie["secure"] = sticky.Secure;
-            cookie["httpOnly"] = sticky.HttpOnly;
-
-            if (sticky.SameSite is { } sameSite)
-            {
-                cookie["sameSite"] = sameSite.ToString().ToLowerInvariant();
-            }
-
-            if (sticky.MaxAgeSeconds is int maxAge)
-            {
-                cookie["maxAge"] = maxAge;
-            }
-
-            options["sticky"] = new Dictionary<string, object> { ["cookie"] = cookie };
-        }
-
-        if (GetHealthCheck(route) is { } healthCheck)
-        {
-            var check = new Dictionary<string, object> { ["path"] = healthCheck.Path };
-
-            if (healthCheck.IntervalSeconds is int interval)
-            {
-                check["interval"] = TraefikNames.ToDuration(TimeSpan.FromSeconds(interval), nameof(healthCheck.IntervalSeconds));
-            }
-
-            if (healthCheck.TimeoutSeconds is int timeout)
-            {
-                check["timeout"] = TraefikNames.ToDuration(TimeSpan.FromSeconds(timeout), nameof(healthCheck.TimeoutSeconds));
-            }
-
-            if (healthCheck.Status is int status)
-            {
-                check["status"] = status;
-            }
-
-            if (healthCheck.Method is { } method)
-            {
-                check["method"] = method;
-            }
-
-            if (healthCheck.Hostname is { } hostname)
-            {
-                check["hostname"] = hostname;
-            }
-
-            options["healthCheck"] = check;
-        }
-
-        return options;
-    }
+            PassHostHeader = route.Options.PassHostHeader,
+            Sticky = route.Options.StickySession is { } sticky
+                ? new TraefikFileModel.Sticky
+                {
+                    Cookie = new TraefikFileModel.StickyCookie
+                    {
+                        Name = sticky.CookieName,
+                        Secure = sticky.Secure,
+                        HttpOnly = sticky.HttpOnly,
+                        SameSite = sticky.SameSite?.ToString().ToLowerInvariant(),
+                        MaxAge = sticky.MaxAgeSeconds,
+                    },
+                }
+                : null,
+            HealthCheck = GetHealthCheck(route) is { } healthCheck
+                ? new TraefikFileModel.HealthCheck
+                {
+                    Path = healthCheck.Path,
+                    Interval = healthCheck.IntervalSeconds is int interval ? TraefikNames.ToDuration(TimeSpan.FromSeconds(interval), nameof(healthCheck.IntervalSeconds)) : null,
+                    Timeout = healthCheck.TimeoutSeconds is int timeout ? TraefikNames.ToDuration(TimeSpan.FromSeconds(timeout), nameof(healthCheck.TimeoutSeconds)) : null,
+                    Status = healthCheck.Status,
+                    Method = healthCheck.Method,
+                    Hostname = healthCheck.Hostname,
+                }
+                : null,
+        };
 
     /// <summary>
     /// Gets the health check of a route: its own, or the one taken from an HTTP probe of the routed endpoint.
@@ -148,38 +110,74 @@ internal static class TraefikLoadBalancer
         string.Equals(endpoint.EndpointAnnotation.Transport, "http2", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Writes options built by <see cref="GetOptions"/> as labels under <paramref name="prefix"/>, for example
+    /// Writes a load balancer built by <see cref="Build"/> as labels under <paramref name="prefix"/>, for example
     /// <c>traefik.http.services.api.loadbalancer</c>. The Docker provider reads label keys case-insensitively, and
-    /// Traefik's own examples use lowercase.
+    /// Traefik's own examples use lowercase. The servers aren't written: the labels pin the server port instead.
     /// </summary>
-    public static void AddLabels(IDictionary<string, string> labels, string prefix, Dictionary<string, object> options)
+    public static void AddLabels(IDictionary<string, string> labels, string prefix, TraefikFileModel.HttpLoadBalancer loadBalancer)
     {
-        foreach (var (key, value) in options)
+        if (loadBalancer.PassHostHeader is bool passHostHeader)
         {
-            var path = $"{prefix}.{key.ToLowerInvariant()}";
-            switch (value)
-            {
-                case Dictionary<string, object> nested:
-                    if (key == "sticky")
-                    {
-                        // The cookie section is enabled by its own key, even when all its options are set.
-                        labels[$"{path}.cookie"] = "true";
-                    }
+            labels[$"{prefix}.passhostheader"] = ToLabel(passHostHeader);
+        }
 
-                    AddLabels(labels, path, nested);
-                    break;
-                case bool flag:
-                    labels[path] = flag ? "true" : "false";
-                    break;
-                case int number:
-                    labels[path] = number.ToString(CultureInfo.InvariantCulture);
-                    break;
-                case string text:
-                    labels[path] = TraefikDockerLabels.EscapeLiteral(text);
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unsupported load balancer option value '{value}'.");
+        if (loadBalancer.Sticky?.Cookie is { } cookie)
+        {
+            var path = $"{prefix}.sticky.cookie";
+
+            // The cookie section is enabled by its own key, even when all its options are set.
+            labels[path] = "true";
+
+            if (cookie.Name is { } name)
+            {
+                labels[$"{path}.name"] = TraefikDockerLabels.EscapeLiteral(name);
+            }
+
+            labels[$"{path}.secure"] = ToLabel(cookie.Secure);
+            labels[$"{path}.httponly"] = ToLabel(cookie.HttpOnly);
+
+            if (cookie.SameSite is { } sameSite)
+            {
+                labels[$"{path}.samesite"] = sameSite;
+            }
+
+            if (cookie.MaxAge is int maxAge)
+            {
+                labels[$"{path}.maxage"] = maxAge.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        if (loadBalancer.HealthCheck is { } healthCheck)
+        {
+            var path = $"{prefix}.healthcheck";
+            labels[$"{path}.path"] = TraefikDockerLabels.EscapeLiteral(healthCheck.Path);
+
+            if (healthCheck.Interval is { } interval)
+            {
+                labels[$"{path}.interval"] = interval;
+            }
+
+            if (healthCheck.Timeout is { } timeout)
+            {
+                labels[$"{path}.timeout"] = timeout;
+            }
+
+            if (healthCheck.Status is int status)
+            {
+                labels[$"{path}.status"] = status.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (healthCheck.Method is { } method)
+            {
+                labels[$"{path}.method"] = TraefikDockerLabels.EscapeLiteral(method);
+            }
+
+            if (healthCheck.Hostname is { } hostname)
+            {
+                labels[$"{path}.hostname"] = TraefikDockerLabels.EscapeLiteral(hostname);
             }
         }
     }
+
+    private static string ToLabel(bool value) => value ? "true" : "false";
 }

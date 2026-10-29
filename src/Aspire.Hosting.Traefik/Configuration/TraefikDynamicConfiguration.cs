@@ -5,6 +5,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Resources.ComposeNodes;
 using YamlDotNet.Serialization;
+using static Aspire.Hosting.Traefik.TraefikFileModel;
 
 namespace Aspire.Hosting.Traefik;
 
@@ -88,37 +89,21 @@ internal static class TraefikDynamicConfiguration
         };
 
         var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: false);
-        var routers = new Dictionary<string, object>();
-        var services = new Dictionary<string, object>();
+        var http = new HttpConfiguration();
 
         foreach (var route in traefik.Routes)
         {
-            var router = new Dictionary<string, object>
+            http.Routers[route.RouterName] = new HttpRouter
             {
-                ["rule"] = await TraefikRouteRule.Build(route.Options).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty,
-                ["entryPoints"] = new[] { route.Options.EntryPoint ?? defaults.EntryPointName },
-                ["service"] = route.RouterName,
-            };
-
-            if (route.Options.Priority is int priority)
-            {
-                router["priority"] = priority;
-            }
-
-            if (route.Middlewares.Count > 0)
-            {
-                // Middlewares defined in this same file need no `@file` provider suffix.
-                router["middlewares"] = route.Middlewares.Select(m => m.Name).ToArray();
-            }
-
-            if (defaults.Tls && route.Options.EntryPoint is null)
-            {
+                Rule = await TraefikRouteRule.Build(route.Options).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty,
+                EntryPoints = [route.Options.EntryPoint ?? defaults.EntryPointName],
+                Service = route.RouterName,
+                Priority = route.Options.Priority,
+                Middlewares = route.Middlewares.Count > 0 ? [.. route.Middlewares.Select(m => m.Name)] : null,
                 // An empty `tls` section enables TLS with the default certificate. No resolver in run mode: see
                 // TraefikResource.GetRouteDefaults.
-                router["tls"] = new Dictionary<string, object>();
-            }
-
-            routers[route.RouterName] = router;
+                Tls = defaults.Tls && route.Options.EntryPoint is null ? new RouterTls() : null,
+            };
 
             var url = await route.Endpoint.GetValueAsync(context, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException($"The endpoint '{route.Endpoint.EndpointName}' of resource '{route.Resource.Name}' has no URL.");
@@ -129,79 +114,55 @@ internal static class TraefikDynamicConfiguration
                 url = $"h2c{url["http".Length..]}";
             }
 
-            var loadBalancer = new Dictionary<string, object>
-            {
-                ["servers"] = new[] { new Dictionary<string, object> { ["url"] = url } },
-            };
-
-            foreach (var (key, value) in TraefikLoadBalancer.GetOptions(route))
-            {
-                loadBalancer[key] = value;
-            }
-
-            services[route.RouterName] = new Dictionary<string, object> { ["loadBalancer"] = loadBalancer };
+            var loadBalancer = TraefikLoadBalancer.Build(route);
+            loadBalancer.Servers = [new HttpServer { Url = url }];
+            http.Services[route.RouterName] = new HttpService { LoadBalancer = loadBalancer };
         }
 
-        var transport = new Dictionary<string, object>();
-        foreach (var protocolRoutes in traefik.TransportRoutes.GroupBy(r => r.Protocol))
+        var document = new Document();
+        foreach (var route in traefik.TransportRoutes)
         {
-            var transportRouters = new Dictionary<string, object>();
-            var transportServices = new Dictionary<string, object>();
+            var transport = route.Protocol == TraefikTransportRoute.UdpProtocol
+                ? document.Udp ??= new TransportConfiguration()
+                : document.Tcp ??= new TransportConfiguration();
 
-            foreach (var route in protocolRoutes)
+            var router = new TransportRouter
             {
-                var router = new Dictionary<string, object>
+                EntryPoints = [route.EntryPoint],
+                Service = route.RouterName,
+            };
+
+            if (route.Tcp is { } tcp)
+            {
+                router.Rule = await TraefikRouteRule.Build(tcp).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty;
+                router.Priority = tcp.Priority;
+
+                if (tcp.TlsPassthrough)
                 {
-                    ["entryPoints"] = new[] { route.EntryPoint },
-                    ["service"] = route.RouterName,
-                };
-
-                if (route.Tcp is { } tcp)
-                {
-                    router["rule"] = await TraefikRouteRule.Build(tcp).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty;
-
-                    if (tcp.Priority is int priority)
-                    {
-                        router["priority"] = priority;
-                    }
-
-                    if (tcp.TlsPassthrough)
-                    {
-                        router["tls"] = new Dictionary<string, object> { ["passthrough"] = true };
-                    }
-                    else if (tcp.Tls)
-                    {
-                        // Traefik's default certificate, as for HTTP routes in run mode.
-                        router["tls"] = new Dictionary<string, object>();
-                    }
+                    router.Tls = new RouterTls { Passthrough = true };
                 }
-
-                transportRouters[route.RouterName] = router;
-
-                // TCP and UDP servers are addresses, not URLs.
-                var address = await route.Endpoint.Property(EndpointProperty.HostAndPort).GetValueAsync(context, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException($"The endpoint '{route.Endpoint.EndpointName}' of resource '{route.Resource.Name}' has no address.");
-
-                transportServices[route.RouterName] = new Dictionary<string, object>
+                else if (tcp.Tls)
                 {
-                    ["loadBalancer"] = new Dictionary<string, object>
-                    {
-                        ["servers"] = new[] { new Dictionary<string, object> { ["address"] = address } },
-                    },
-                };
+                    // Traefik's default certificate, as for HTTP routes in run mode.
+                    router.Tls = new RouterTls();
+                }
             }
 
-            transport[protocolRoutes.Key] = new Dictionary<string, object>
+            transport.Routers[route.RouterName] = router;
+
+            var address = await route.Endpoint.Property(EndpointProperty.HostAndPort).GetValueAsync(context, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"The endpoint '{route.Endpoint.EndpointName}' of resource '{route.Resource.Name}' has no address.");
+
+            transport.Services[route.RouterName] = new TransportService
             {
-                ["routers"] = transportRouters,
-                ["services"] = transportServices,
+                LoadBalancer = new TransportLoadBalancer { Servers = [new TransportServer { Address = address }] },
             };
         }
 
         if (traefik.DashboardHost is { } dashboardHost)
         {
             var rule = await BuildHostRule(dashboardHost).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty;
-            routers[traefik.DashboardRouterName] = BuildDashboardRouter(traefik, rule, [defaults.EntryPointName], defaults.Tls ? new Dictionary<string, object>() : null);
+            http.Routers[traefik.DashboardRouterName] = BuildDashboardRouter(traefik, rule, defaults.EntryPointName, defaults.Tls ? new RouterTls() : null);
         }
 
         // Every middleware of this Traefik is written, including unused ones, which Traefik accepts. Routes can also
@@ -216,16 +177,16 @@ internal static class TraefikDynamicConfiguration
             values[expression] = await expression.GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty;
         }
 
-        var middlewares = new Dictionary<string, object>();
         foreach (var middleware in middlewareResources)
         {
-            middlewares[middleware.Name] = new Dictionary<string, object>
+            http.Middlewares[middleware.Name] = new()
             {
                 [middleware.Type] = middleware.Options.ToFileConfiguration(expression => values[expression], literal => literal),
             };
         }
 
-        return Serialize(routers, services, middlewares, transport);
+        document.Http = http.IsEmpty ? null : http;
+        return Serialize(document);
     }
 
     /// <summary>
@@ -261,30 +222,26 @@ internal static class TraefikDynamicConfiguration
     public static string GeneratePublish(TraefikResource traefik, DockerComposeServiceResource composeService, Service service)
     {
         var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
-        var routers = new Dictionary<string, object>();
+        var http = new HttpConfiguration();
 
         if (traefik.DashboardHost is { } dashboardHost)
         {
-            Dictionary<string, object>? tls = null;
-            if (defaults.Tls)
-            {
-                tls = [];
-                if (defaults.CertResolver is { } certResolver)
+            var tls = defaults.Tls
+                ? new RouterTls
                 {
-                    tls["certResolver"] = TraefikDockerLabels.ToComposeExpression(composeService, certResolver);
+                    CertResolver = defaults.CertResolver is { } certResolver ? TraefikDockerLabels.ToComposeExpression(composeService, certResolver) : null,
                 }
-            }
+                : null;
 
-            routers[traefik.DashboardRouterName] = BuildDashboardRouter(
+            http.Routers[traefik.DashboardRouterName] = BuildDashboardRouter(
                 traefik,
                 TraefikDockerLabels.ToComposeExpression(composeService, BuildHostRule(dashboardHost)),
-                [TraefikDockerLabels.ToComposeExpression(composeService, defaults.EntryPoint)],
+                TraefikDockerLabels.ToComposeExpression(composeService, defaults.EntryPoint),
                 tls);
         }
 
         // Unlike run mode, only the middlewares Traefik itself uses: the routes' middlewares are labels on the routed
         // services. A chain refers to its members by name, so their definitions go along with it.
-        var middlewares = new Dictionary<string, object>();
         foreach (var middleware in GetPublishMiddlewares(traefik))
         {
             var probes = TraefikDockerLabels.GetMiddlewareValueProbes(middleware);
@@ -302,10 +259,10 @@ internal static class TraefikDynamicConfiguration
                 options["service"] = $"{errorService}@docker";
             }
 
-            middlewares[middleware.Name] = new Dictionary<string, object> { [middleware.Type] = options };
+            http.Middlewares[middleware.Name] = new() { [middleware.Type] = options };
         }
 
-        return Serialize(routers, services: [], middlewares, transport: []);
+        return Serialize(new Document { Http = http.IsEmpty ? null : http });
     }
 
     /// <summary>
@@ -322,57 +279,22 @@ internal static class TraefikDynamicConfiguration
     private static ReferenceExpression BuildHostRule(ReferenceExpression host) =>
         TraefikRouteRule.Build(new TraefikRouteOptions { Host = host });
 
-    private static Dictionary<string, object> BuildDashboardRouter(TraefikResource traefik, string rule, string[] entryPoints, Dictionary<string, object>? tls)
-    {
-        var router = new Dictionary<string, object>
+    private static HttpRouter BuildDashboardRouter(TraefikResource traefik, string rule, string entryPoint, RouterTls? tls) =>
+        new()
         {
-            ["rule"] = rule,
-            ["entryPoints"] = entryPoints,
-            ["service"] = DashboardService,
-            // Middlewares defined in this same file need no `@file` provider suffix.
-            ["middlewares"] = traefik.DashboardMiddlewares.Select(m => m.Name).ToArray(),
+            Rule = rule,
+            EntryPoints = [entryPoint],
+            Service = DashboardService,
+            Middlewares = [.. traefik.DashboardMiddlewares.Select(m => m.Name)],
+            Tls = tls,
         };
 
-        if (tls is not null)
-        {
-            router["tls"] = tls;
-        }
-
-        return router;
-    }
-
-    private static string Serialize(Dictionary<string, object> routers, Dictionary<string, object> services, Dictionary<string, object> middlewares, Dictionary<string, object> transport)
+    private static string Serialize(Document document)
     {
-        var http = new Dictionary<string, object>();
-        if (routers.Count > 0)
-        {
-            http["routers"] = routers;
-        }
-
-        if (services.Count > 0)
-        {
-            http["services"] = services;
-        }
-
-        if (middlewares.Count > 0)
-        {
-            http["middlewares"] = middlewares;
-        }
-
-        var document = new Dictionary<string, object>();
-        if (http.Count > 0)
-        {
-            document["http"] = http;
-        }
-
-        // The `tcp` and `udp` sections, which have the same shape as `http` without middlewares.
-        foreach (var (protocol, section) in transport)
-        {
-            document[protocol] = section;
-        }
-
         var serializer = new SerializerBuilder()
             .DisableAliases()
+            // Unset options are left out, so Traefik's defaults apply.
+            .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             // The file is read by Traefik on Linux, and at publish time it is embedded in the compose file, so it
             // shouldn't depend on the line endings of the machine that generates it.
             .WithNewLine("\n")

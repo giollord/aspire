@@ -19,10 +19,13 @@ namespace Aspire.Hosting;
 /// </summary>
 public static partial class TraefikBuilderExtensions
 {
-    private const string DockerSocketPath = "/var/run/docker.sock";
-
     // The endpoint of the socket proxy container that Traefik's Docker provider connects to.
     internal const string SocketProxyEndpointName = "docker";
+
+    private const string DockerSocketPath = "/var/run/docker.sock";
+
+    // The prefix of the variables that reference each backend from Traefik's environment in run mode.
+    private const string BackendVariablePrefix = "ASPIRE_TRAEFIK_BACKEND_";
 
     // The port docker-socket-proxy serves the filtered Docker API on.
     private const int SocketProxyPort = 2375;
@@ -153,13 +156,13 @@ public static partial class TraefikBuilderExtensions
                     // one of those. The values also show the resolved backend addresses in the dashboard.
                     foreach (var route in resource.Routes)
                     {
-                        context.EnvironmentVariables[$"ASPIRE_TRAEFIK_BACKEND_{TraefikNames.ToEnvironmentName(route.RouterName)}"] = route.Endpoint;
+                        context.EnvironmentVariables[$"{BackendVariablePrefix}{TraefikNames.ToEnvironmentName(route.RouterName)}"] = route.Endpoint;
                     }
 
                     // TCP and UDP routers have their own namespaces, so their names can repeat an HTTP router's.
                     foreach (var route in resource.TransportRoutes)
                     {
-                        context.EnvironmentVariables[$"ASPIRE_TRAEFIK_BACKEND_{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}"] =
+                        context.EnvironmentVariables[$"{BackendVariablePrefix}{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}"] =
                             route.Endpoint.Property(EndpointProperty.HostAndPort);
                     }
 
@@ -378,7 +381,7 @@ public static partial class TraefikBuilderExtensions
     /// var traefik = builder.AddTraefik("traefik")
     ///     .WithLetsEncrypt("admin@example.com");
     ///
-    /// traefik.WithEntryPointMiddleware("websecure", traefik.AddSecurityHeaders("security-headers"));
+    /// traefik.WithEntryPointMiddleware(TraefikResource.WebSecureEntryPointName, traefik.AddSecurityHeaders("security-headers"));
     /// </code>
     /// </example>
     [AspireExport]

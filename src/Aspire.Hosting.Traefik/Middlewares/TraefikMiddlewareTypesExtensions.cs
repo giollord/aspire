@@ -17,6 +17,9 @@ namespace Aspire.Hosting;
 /// </remarks>
 public static class TraefikMiddlewareTypesExtensions
 {
+    // Also used for the middleware behind TraefikRouteOptions.StripPathPrefix.
+    internal const string StripPrefixType = "stripPrefix";
+
     /// <summary>
     /// Adds a <c>stripPrefix</c> middleware, which removes a path prefix before the request is forwarded.
     /// </summary>
@@ -33,7 +36,7 @@ public static class TraefikMiddlewareTypesExtensions
     {
         RequirePaths(prefixes, nameof(prefixes));
 
-        return builder.AddMiddleware(name, "stripPrefix")
+        return builder.AddMiddleware(name, StripPrefixType)
             .WithOption("prefixes", prefixes);
     }
 

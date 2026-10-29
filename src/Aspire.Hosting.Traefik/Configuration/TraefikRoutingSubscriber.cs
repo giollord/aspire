@@ -27,6 +27,9 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventingSubscriber
 {
+    // The type of the relationships from Traefik to its backends, which the dashboard shows.
+    private const string RouteRelationshipType = "Route";
+
     /// <inheritdoc/>
     public Task SubscribeAsync(IDistributedApplicationEventing eventing, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
     {
@@ -171,7 +174,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 // Show the routes as relationships in the dashboard, from the proxy to its backends.
                 foreach (var traefik in routes.Select(r => r.Traefik).Distinct())
                 {
-                    traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, "Route"));
+                    traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, RouteRelationshipType));
                 }
 
                 // Only middleware resources: the StripPathPrefix middleware isn't in the model.
@@ -222,7 +225,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     _ => throw new UnreachableException(),
                 };
 
-                var protocol = tcp is null ? "udp" : "tcp";
+                var protocol = TraefikTransportRoute.GetProtocol(tcp);
                 var index = counts[protocol] = counts.GetValueOrDefault(protocol) + 1;
                 routerName ??= index == 1 ? resource.Name : $"{resource.Name}-{index}";
 
@@ -271,9 +274,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             {
                 foreach (var traefik in routes.Select(r => r.Traefik).Distinct())
                 {
-                    if (!traefik.Annotations.OfType<ResourceRelationshipAnnotation>().Any(a => a.Resource == resource && a.Type == "Route"))
+                    if (!traefik.Annotations.OfType<ResourceRelationshipAnnotation>().Any(a => a.Resource == resource && a.Type == RouteRelationshipType))
                     {
-                        traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, "Route"));
+                        traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, RouteRelationshipType));
                     }
                 }
             }
@@ -312,7 +315,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     : throw new InvalidOperationException($"Resource '{resource.Name}' has {(endpoints.Count == 0 ? "no endpoints" : "several endpoints and none is named '" + protocol + "'")}. Set the endpoint name of its Traefik {protocol.ToUpperInvariant()} route."));
 
         // A TCP route can target any TCP endpoint, including an HTTP one, but datagrams can only go to a UDP port.
-        var expected = protocol == "udp" ? ProtocolType.Udp : ProtocolType.Tcp;
+        var expected = protocol == TraefikTransportRoute.UdpProtocol ? ProtocolType.Udp : ProtocolType.Tcp;
         if (annotation.Protocol != expected)
         {
             throw new InvalidOperationException($"The endpoint '{annotation.Name}' of resource '{resource.Name}' uses {annotation.Protocol}, so it can't receive a Traefik {protocol.ToUpperInvariant()} route.");
@@ -400,7 +403,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' strips its path prefix with a middleware named '{name}', but '{annotation.Traefik.Name}' already has a middleware with that name.");
             }
 
-            var strip = new TraefikMiddlewareResource(name, "stripPrefix", annotation.Traefik);
+            var strip = new TraefikMiddlewareResource(name, TraefikMiddlewareTypesExtensions.StripPrefixType, annotation.Traefik);
             strip.Options.Set("prefixes", new object[] { annotation.Options.PathPrefix! });
             middlewares.Add(strip);
         }
@@ -481,7 +484,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             middleware.OAuth2Proxy!.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
             {
                 Host = host,
-                PathPrefix = "/oauth2",
+                PathPrefix = TraefikForwardAuthExtensions.OAuth2ProxyPrefix,
                 Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
                 EntryPoint = entryPoint,
                 RouterName = $"{middleware.OAuth2Proxy.Name}-{middleware.ProtectedHosts.Count}",

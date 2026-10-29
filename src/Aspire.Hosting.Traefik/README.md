@@ -114,7 +114,7 @@ Plain TCP carries no host name, so such a route takes the whole entry point. Ove
 ```csharp
 rabbit.WithTraefikTcpRoute(traefik, route =>
 {
-    route.EntryPoint = "websecure";
+    route.EntryPoint = TraefikResource.WebSecureEntryPointName;
     route.HostSni = ReferenceExpression.Create($"amqp.{domain}");
     route.Tls = true;   // or route.TlsPassthrough = true
 });
@@ -239,7 +239,7 @@ See the [middleware reference](https://doc.traefik.io/traefik/reference/routing-
 `WithEntryPointMiddleware` applies middlewares to every router on an entry point, including routers that don't come from Aspire routes. They run before the middlewares of the route:
 
 ```csharp
-traefik.WithEntryPointMiddleware("websecure", traefik.AddSecurityHeaders("security-headers"));
+traefik.WithEntryPointMiddleware(TraefikResource.WebSecureEntryPointName, traefik.AddSecurityHeaders("security-headers"));
 ```
 
 - Traefik reads them from its static configuration, so they are defined in Traefik's own file provider. At publish time that file is a Docker Compose config of the Traefik service, with `${VAR}` placeholders like the labels.

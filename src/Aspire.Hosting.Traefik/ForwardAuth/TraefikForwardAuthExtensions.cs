@@ -15,7 +15,13 @@ public static class TraefikForwardAuthExtensions
     // reaches oauth2-proxy rather than the protected backend.
     internal const int SignInRoutePriority = 1_000_000;
 
+    // oauth2-proxy serves its sign-in, callback, and sign-out pages under this path, the default of --proxy-prefix.
+    // https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options
+    internal const string OAuth2ProxyPrefix = "/oauth2";
+
     private const int OAuth2ProxyPort = 4180;
+
+    private const string OAuth2ProxyEndpointName = "http";
 
     /// <summary>
     /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
@@ -208,13 +214,13 @@ public static class TraefikForwardAuthExtensions
         var proxy = applicationBuilder.AddContainer($"{name}-proxy", TraefikContainerImageTags.OAuth2ProxyImage, TraefikContainerImageTags.OAuth2ProxyTag)
             .WithImageRegistry(TraefikContainerImageTags.OAuth2ProxyRegistry)
             .WithIconName("PersonLock")
-            .WithHttpEndpoint(targetPort: OAuth2ProxyPort, name: "http")
+            .WithHttpEndpoint(targetPort: OAuth2ProxyPort, name: OAuth2ProxyEndpointName)
             .WithHttpHealthCheck("/ping")
             // Secrets go into the environment, not the arguments, which the dashboard shows.
             .WithEnvironment("OAUTH2_PROXY_CLIENT_SECRET", clientSecret)
             .WithEnvironment("OAUTH2_PROXY_COOKIE_SECRET", cookieSecret);
 
-        var middleware = builder.AddForwardAuth(name, proxy.GetEndpoint("http"), "/", forwardAuth =>
+        var middleware = builder.AddForwardAuth(name, proxy.GetEndpoint(OAuth2ProxyEndpointName), "/", forwardAuth =>
         {
             // The headers oauth2-proxy sets with --set-xauthrequest.
             forwardAuth.AuthResponseHeaders.Add("X-Auth-Request-User");
