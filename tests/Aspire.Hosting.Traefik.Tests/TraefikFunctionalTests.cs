@@ -6,6 +6,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
 using Aspire.Hosting.Utils;
 using Aspire.TestUtilities;
+using Microsoft.AspNetCore.InternalTesting;
 
 namespace Aspire.Hosting.Traefik.Tests;
 
@@ -18,7 +19,6 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task RoutesRequestsByHostToContainer()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var traefik = builder.AddTraefik("traefik");
@@ -28,11 +28,11 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
             .WithTraefikRoute(traefik, "whoami.dev.localhost");
 
         await using var app = builder.Build();
-        await app.StartAsync(cts.Token);
+        await app.StartAsync().DefaultTimeout(TestConstants.ExtraLongTimeoutDuration);
 
-        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
-        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await WaitForResourcesAsync(app, traefik.Resource.Name, whoami.Resource.Name);
 
+        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
         using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
 
         // The route matches on the Host header, so send it explicitly rather than relying on *.localhost
@@ -47,14 +47,13 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         using var notFound = await httpClient.SendAsync(unrouted, cts.Token);
         Assert.Equal(HttpStatusCode.NotFound, notFound.StatusCode);
 
-        await app.StopAsync(cts.Token);
+        await app.StopAsync().DefaultTimeout(TestConstants.LongTimeoutDuration);
     }
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task AppliesMiddlewaresToRoutes()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var traefik = builder.AddTraefik("traefik");
@@ -75,11 +74,11 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
             .WithTraefikMiddleware(headers);
 
         await using var app = builder.Build();
-        await app.StartAsync(cts.Token);
+        await app.StartAsync().DefaultTimeout(TestConstants.ExtraLongTimeoutDuration);
 
-        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
-        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await WaitForResourcesAsync(app, traefik.Resource.Name, whoami.Resource.Name);
 
+        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
         using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
 
         using var response = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token, "/v1/test");
@@ -90,14 +89,13 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         Assert.Contains("GET /test HTTP/1.1", body);
         Assert.Contains("X-Aspire-Middleware: applied", body);
 
-        await app.StopAsync(cts.Token);
+        await app.StopAsync().DefaultTimeout(TestConstants.LongTimeoutDuration);
     }
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task BasicAuthWithPlainPasswordAndStrippedPrefix()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var password = builder.AddParameter("password", "s3cret", secret: true);
@@ -115,11 +113,11 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
             .WithTraefikMiddleware(auth);
 
         await using var app = builder.Build();
-        await app.StartAsync(cts.Token);
+        await app.StartAsync().DefaultTimeout(TestConstants.ExtraLongTimeoutDuration);
 
-        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
-        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await WaitForResourcesAsync(app, traefik.Resource.Name, whoami.Resource.Name);
 
+        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
         using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
 
         using var anonymous = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token, "/app/test");
@@ -134,14 +132,13 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         var body = await authenticated.Content.ReadAsStringAsync(cts.Token);
         Assert.Contains("GET /test HTTP/1.1", body);
 
-        await app.StopAsync(cts.Token);
+        await app.StopAsync().DefaultTimeout(TestConstants.LongTimeoutDuration);
     }
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task ForwardAuthLetsAuthorizedRequestsThrough()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var traefik = builder.AddTraefik("traefik");
@@ -175,12 +172,11 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
             .WithTraefikMiddleware(check);
 
         await using var app = builder.Build();
-        await app.StartAsync(cts.Token);
+        await app.StartAsync().DefaultTimeout(TestConstants.ExtraLongTimeoutDuration);
 
-        await app.ResourceNotifications.WaitForResourceHealthyAsync(traefik.Resource.Name, cts.Token);
-        await app.ResourceNotifications.WaitForResourceAsync(whoami.Resource.Name, KnownResourceStates.Running, cts.Token);
-        await app.ResourceNotifications.WaitForResourceAsync(authServer.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await WaitForResourcesAsync(app, traefik.Resource.Name, whoami.Resource.Name, authServer.Resource.Name);
 
+        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
         using var httpClient = app.CreateHttpClient(traefik.Resource.Name, "web");
 
         using var anonymous = await SendWithRetryAsync(httpClient, "whoami.dev.localhost", cts.Token);
@@ -195,20 +191,35 @@ public class TraefikFunctionalTests(ITestOutputHelper testOutputHelper)
         var body = await authorized.Content.ReadAsStringAsync(cts.Token);
         Assert.Contains("X-User: alice", body);
 
-        await app.StopAsync(cts.Token);
+        await app.StopAsync().DefaultTimeout(TestConstants.LongTimeoutDuration);
+    }
+
+    private static async Task WaitForResourcesAsync(DistributedApplication app, string traefik, params string[] backends)
+    {
+        // Traefik has a health check; the backends don't, so Running is the best signal for them (see
+        // SendWithRetryAsync). Waiting in parallel keeps the total wait the longest single one.
+        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.DefaultOrchestratorTestLongTimeout);
+
+        await Task.WhenAll(
+            [
+                app.ResourceNotifications.WaitForResourceHealthyAsync(traefik, cts.Token),
+                .. backends.Select(backend => app.ResourceNotifications.WaitForResourceAsync(backend, KnownResourceStates.Running, cts.Token)),
+            ]);
     }
 
     private static async Task<HttpResponseMessage> SendWithRetryAsync(HttpClient httpClient, string host, CancellationToken cancellationToken, string path = "/")
     {
-        // Traefik reports healthy before the file provider has necessarily loaded the dynamic configuration, so
-        // the first requests can still get 404.
+        // Traefik reports healthy before the file provider has necessarily loaded the dynamic configuration, so the
+        // first requests can still get 404. A backend container is Running before its server listens, and until then
+        // Traefik answers 502 (or 500 from a forward-auth server it can't reach), so those are retried too. 503 is
+        // what Traefik returns while a route has no healthy server.
         while (true)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
             request.Headers.Host = host;
 
             var response = await httpClient.SendAsync(request, cancellationToken);
-            if (response.StatusCode != HttpStatusCode.NotFound)
+            if (response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable))
             {
                 return response;
             }

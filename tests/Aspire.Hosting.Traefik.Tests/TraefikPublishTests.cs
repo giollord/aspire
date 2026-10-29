@@ -54,6 +54,33 @@ public class TraefikPublishTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public async Task PublishedTraefikUrlFollowsTlsConfiguredAfterIt()
+    {
+        using var workspace = TemporaryWorkspace.Create(testOutputHelper);
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, workspace.Path);
+        builder.Services.AddSingleton<IResourceContainerImageManager, MockImageBuilder>();
+        builder.Configuration["AppHost:Sha256"] = "0123456789abcdef";
+
+        builder.AddDockerComposeEnvironment("compose")
+            .WithDashboard(enabled: false);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var api = builder.AddContainer("api", "myregistry/api")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "api.example.com");
+
+        // The URL is taken before TLS is configured, and still uses HTTPS in the generated environment.
+        api.WithEnvironment("PUBLIC_URL", api.GetTraefikUrl());
+        traefik.WithLetsEncrypt("admin@example.com");
+
+        using var app = builder.Build();
+        app.Run();
+
+        await VerifyComposeOutput(workspace.Path);
+    }
+
+    [Fact]
     public async Task PublishWithParameterizedAcmeSettings()
     {
         using var workspace = TemporaryWorkspace.Create(testOutputHelper);

@@ -15,8 +15,16 @@ internal static class TraefikUrls
     /// publish time.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// In run mode the entry point's host port is random unless pinned, so the URL includes it. At publish time the
     /// URL assumes the standard ports (80 for HTTP, 443 for HTTPS) that an internet-facing proxy listens on.
+    /// </para>
+    /// <para>
+    /// The scheme and the port depend on how Traefik is configured, which can still change after the URL is built:
+    /// <c>GetTraefikUrl</c> may be called before <c>WithLetsEncrypt</c> or <c>PublishAsExternal</c>. So both are
+    /// decided when the expression is evaluated, once the model is complete. The scheme is a conditional expression,
+    /// which the Docker Compose publisher resolves while writing the files; the port only exists in run mode.
+    /// </para>
     /// </remarks>
     public static ReferenceExpression Build(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
     {
@@ -25,22 +33,18 @@ internal static class TraefikUrls
             throw new InvalidOperationException($"The Traefik route has no host, so it has no public URL. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.Host)}.");
         }
 
-        var defaults = traefik.GetRouteDefaults(isPublishMode);
-        // A route's own resolver turns on TLS when published (see TraefikDockerLabels), but not in run mode, where no
-        // certificates are requested.
-        var isSecure = options.EntryPoint is null
-            ? defaults.IsSecure || (isPublishMode && options.CertResolver is not null)
-            : string.Equals(options.EntryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal) || (isPublishMode && options.CertResolver is not null);
-
         var builder = new ReferenceExpressionBuilder();
-        builder.AppendLiteral(isSecure ? "https://" : "http://");
+        builder.AppendValueProvider(ReferenceExpression.CreateConditional(
+            new SecureCondition(traefik, options, isPublishMode),
+            bool.TrueString,
+            ReferenceExpression.Create($"https://"),
+            ReferenceExpression.Create($"http://")));
         builder.AppendValueProvider(host);
 
         if (!isPublishMode && traefik is TraefikResource managed)
         {
             builder.AppendLiteral(":");
-            var entryPoint = options.EntryPoint ?? defaults.EntryPointName;
-            builder.AppendValueProvider(TraefikStaticConfiguration.GetHostEndpoint(managed, entryPoint).Property(EndpointProperty.Port));
+            builder.AppendValueProvider(new HostPort(managed, options));
         }
 
         if ((options.PathPrefix ?? options.Path) is { } path)
@@ -49,5 +53,54 @@ internal static class TraefikUrls
         }
 
         return builder.Build();
+    }
+
+    private static bool IsSecure(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
+    {
+        // A route's own resolver turns on TLS when published (see TraefikDockerLabels), but not in run mode, where no
+        // certificates are requested.
+        if (isPublishMode && options.CertResolver is not null)
+        {
+            return true;
+        }
+
+        return options.EntryPoint is null
+            ? traefik.GetRouteDefaults(isPublishMode).IsSecure
+            : string.Equals(options.EntryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>True</c> when the route is served over HTTPS, read from Traefik's configuration when evaluated.
+    /// </summary>
+    private sealed class SecureCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode) : IValueProvider
+    {
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<string?>(IsSecure(traefik, options, isPublishMode).ToString());
+    }
+
+    /// <summary>
+    /// The host port of the route's entry point in run mode, read from Traefik's configuration when evaluated.
+    /// </summary>
+    /// <remarks>
+    /// A conditional expression can't choose between the <c>web</c> and <c>websecure</c> ports: dependency tracking
+    /// walks both branches, and the <c>websecure</c> endpoint doesn't exist without TLS.
+    /// </remarks>
+    private sealed class HostPort(TraefikResource traefik, TraefikRouteOptions options) : IValueProvider, IManifestExpressionProvider, IValueWithReferences
+    {
+        public string ValueExpression => GetPort().ValueExpression;
+
+        public IEnumerable<object> References => [traefik];
+
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) =>
+            GetPort().GetValueAsync(cancellationToken);
+
+        public ValueTask<string?> GetValueAsync(ValueProviderContext context, CancellationToken cancellationToken = default) =>
+            ((IValueProvider)GetPort()).GetValueAsync(context, cancellationToken);
+
+        private EndpointReferenceExpression GetPort()
+        {
+            var entryPoint = options.EntryPoint ?? ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: false).EntryPointName;
+            return TraefikStaticConfiguration.GetHostEndpoint(traefik, entryPoint).Property(EndpointProperty.Port);
+        }
     }
 }

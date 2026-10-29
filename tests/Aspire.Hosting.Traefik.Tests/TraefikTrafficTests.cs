@@ -280,7 +280,7 @@ public class TraefikTrafficTests(ITestOutputHelper testOutputHelper)
             .WithEndpoint(targetPort: 5432, name: "tcp")
             .WithTraefikTcpRoute(traefik, "mysql");
         Assert.Equal(
-            "The Traefik TCP route 'missing' of resource 'missing' uses the entry point 'mysql', which 'traefik' doesn't have. Add it with WithEntryPoint.",
+            "The Traefik TCP route 'missing' of resource 'missing' uses the entry point 'mysql', which 'traefik' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for 'websecure'.",
             ApplyRoutesAndGetError(builder));
         builder.Resources.Remove(missing.Resource);
 
@@ -297,6 +297,39 @@ public class TraefikTrafficTests(ITestOutputHelper testOutputHelper)
             .WithTraefikUdpRoute(traefik, "dns");
         Assert.Equal(
             "The endpoint 'dns' of resource 'tcp-endpoint' uses Tcp, so it can't receive a Traefik UDP route.",
+            ApplyRoutesAndGetError(builder));
+    }
+
+    [Fact]
+    public void HttpRoutesNeedAnExistingTcpEntryPoint()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithEntryPoint("dns", targetPort: 53, scheme: "udp");
+
+        // `websecure` only exists once TLS is configured.
+        var websecure = builder.AddContainer("websecure", "image")
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"web.example.com");
+                route.EntryPoint = "websecure";
+            });
+        Assert.Equal(
+            "The Traefik HTTP route 'websecure' of resource 'websecure' uses the entry point 'websecure', which 'traefik' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for 'websecure'.",
+            ApplyRoutesAndGetError(builder));
+        builder.Resources.Remove(websecure.Resource);
+
+        builder.AddContainer("on-udp", "image")
+            .WithHttpEndpoint(targetPort: 80)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"web.example.com");
+                route.EntryPoint = "dns";
+            });
+        Assert.Equal(
+            "The Traefik HTTP route 'on-udp' of resource 'on-udp' needs a TCP entry point, but 'dns' listens for UDP.",
             ApplyRoutesAndGetError(builder));
     }
 

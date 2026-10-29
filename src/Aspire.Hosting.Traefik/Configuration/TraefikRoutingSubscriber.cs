@@ -41,7 +41,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
     /// <summary>
     /// Resolves the routes of every routed resource and applies them to Traefik's configuration or the Docker Compose
-    /// services. It can run again: the routes it generates are recreated each time.
+    /// services. It runs once per application, on <see cref="BeforeStartEvent"/>: it adds annotations (URLs,
+    /// relationships, Docker Compose customizations) that a second run would duplicate. Only the generated sign-in
+    /// routes and the route lists on Traefik are reset first.
     /// </summary>
     internal static void ApplyRoutes(DistributedApplicationModel model, bool isPublishMode)
     {
@@ -119,6 +121,13 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     !annotation.Traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
                 {
                     throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{annotation.Traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
+                }
+
+                // Traefik only logs a router whose entry point is missing or listens for UDP, and the route answers 404,
+                // so check it here like the TCP and UDP routes. An external Traefik's entry points aren't known.
+                if (annotation.Options.EntryPoint is { } entryPoint && (!isPublishMode || annotation.Traefik.PublishExternal is null))
+                {
+                    ValidateEntryPoint(annotation.Traefik, resource, routerName, entryPoint, "HTTP", isUdp: false);
                 }
 
                 var endpoint = ResolveEndpoint(resourceWithEndpoints, annotation.Options.EndpointName);
@@ -231,7 +240,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 // An external Traefik's entry points and resolvers aren't known when published.
                 if (!isPublishMode || traefik.PublishExternal is null)
                 {
-                    ValidateTransportEntryPoint(traefik, resource, routerName, entryPoint, isUdp: tcp is null);
+                    ValidateEntryPoint(traefik, resource, routerName, entryPoint, protocol.ToUpperInvariant(), isUdp: tcp is null);
 
                     if (tcp?.CertResolver is { } certResolver && !traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
                     {
@@ -271,7 +280,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         }
     }
 
-    private static void ValidateTransportEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, bool isUdp)
+    private static void ValidateEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, string kind, bool isUdp)
     {
         var custom = traefik.CustomEntryPoints.FirstOrDefault(e => e.Name == entryPoint);
         var exists = custom is not null
@@ -280,14 +289,14 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
         if (!exists)
         {
-            throw new InvalidOperationException($"The Traefik {(isUdp ? "UDP" : "TCP")} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint.");
+            throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for '{TraefikResource.WebSecureEntryPointName}'.");
         }
 
         if (isUdp != (custom?.IsUdp ?? false))
         {
             throw new InvalidOperationException(isUdp
                 ? $"The Traefik UDP route '{routerName}' of resource '{resource.Name}' needs a UDP entry point, but '{entryPoint}' listens for TCP. Add one with WithEntryPoint(name, targetPort, scheme: \"udp\")."
-                : $"The Traefik TCP route '{routerName}' of resource '{resource.Name}' needs a TCP entry point, but '{entryPoint}' listens for UDP.");
+                : $"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' needs a TCP entry point, but '{entryPoint}' listens for UDP.");
         }
     }
 

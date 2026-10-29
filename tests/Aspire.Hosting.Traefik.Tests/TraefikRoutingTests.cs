@@ -144,6 +144,26 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
         Assert.Equal("https://api.dev.localhost:8443", url);
     }
 
+    [Fact]
+    public async Task GetTraefikUrlFollowsTlsConfiguredAfterIt()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "api.dev.localhost");
+
+        var url = api.GetTraefikUrl();
+
+        traefik.WithLetsEncrypt("admin@example.com");
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+        EndpointAllocation.Allocate(traefik.Resource, "websecure", hostPort: 8443, containerHost: "traefik", containerPort: 443);
+
+        Assert.Equal("https://api.dev.localhost:8443", await url.GetValueAsync(CancellationToken.None));
+    }
+
     [Theory]
     [InlineData(false, null, "https://api.example.com")]
     [InlineData(true, "web", "http://api.example.com")]

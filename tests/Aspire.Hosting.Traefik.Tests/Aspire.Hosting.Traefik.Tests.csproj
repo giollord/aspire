@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Include="$(TestsSharedDir)\TestModuleInitializer.cs" />
+    <Compile Include="$(TestsSharedDir)\AsyncTestHelpers.cs" />
   </ItemGroup>
 
   <ItemGroup>
