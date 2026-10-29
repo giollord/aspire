@@ -356,8 +356,8 @@ public static class TraefikRoutingExtensions
     /// in another resource's environment.
     /// </para>
     /// <para>
-    /// The scheme depends on the Traefik configuration when this method is called, so configure TLS
-    /// (<c>WithLetsEncrypt</c>) and <c>PublishAsExternal</c> on Traefik first.
+    /// The scheme and the run-mode port follow Traefik's final configuration, such as <c>WithLetsEncrypt</c> and
+    /// <c>PublishAsExternal</c>, whether those are called before or after this method.
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">The resource has no Traefik route, or its first route has no host.</exception>

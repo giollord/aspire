@@ -268,7 +268,7 @@ The dashboard is then served at `/dashboard/` on that host, on the default entry
 web.WithEnvironment("PUBLIC_URL", web.GetTraefikUrl());
 ```
 
-Configure HTTPS (`WithLetsEncrypt`) and `PublishAsExternal` before calling `GetTraefikUrl()`, because they decide the scheme.
+The scheme and port follow Traefik's final configuration, so `WithLetsEncrypt` and `PublishAsExternal` can be called before or after `GetTraefikUrl()`.
 
 ## HTTPS with Let's Encrypt
 

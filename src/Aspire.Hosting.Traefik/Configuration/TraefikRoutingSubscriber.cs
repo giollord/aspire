@@ -55,16 +55,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
         AddSignInRoutes(model, isPublishMode);
 
-        // Traefik matches router names case-sensitively in the file provider, but Docker label keys are compared
-        // case-insensitively by some tooling, so treat names that differ only by case as duplicates.
-        var routerNames = new Dictionary<string, IResource>(StringComparer.OrdinalIgnoreCase);
+        // Router names that differ only by case, or by '-' versus '_', are duplicates: see RouterNameComparer.
+        var routerNames = new Dictionary<string, (IResource Owner, string Name)>(RouterNameComparer.Instance);
         var publishesToDockerCompose = isPublishMode && model.Resources.OfType<DockerComposeEnvironmentResource>().Any();
 
         foreach (var traefik in model.Resources.OfType<TraefikResource>())
         {
             if (traefik.DashboardHost is not null)
             {
-                routerNames[traefik.DashboardRouterName] = traefik;
+                routerNames[traefik.DashboardRouterName] = (traefik, traefik.DashboardRouterName);
             }
 
             if (publishesToDockerCompose)
@@ -107,12 +106,12 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
                 }
 
-                if (routerNames.TryGetValue(routerName, out var owner))
+                if (routerNames.TryGetValue(routerName, out var existing))
                 {
-                    throw new InvalidOperationException($"The Traefik router name '{routerName}' is used by both '{owner.Name}' and '{resource.Name}'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.RouterName)} to make it unique.");
+                    throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' clashes with '{existing.Name}' of '{existing.Owner.Name}'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.RouterName)} to make it unique.");
                 }
 
-                routerNames.Add(routerName, resource);
+                routerNames.Add(routerName, (resource, routerName));
 
                 // An external Traefik's resolvers aren't known, but the managed one's are, in run mode too, so a typo
                 // shows up before the first deployment.
@@ -194,7 +193,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
     {
         // TCP and UDP routers live in their own namespaces in Traefik (`tcp.routers`, `udp.routers`), so a name only has
         // to be unique within its protocol.
-        var routerNames = new Dictionary<(string Protocol, string Name), IResource>(new TransportRouterNameComparer());
+        var routerNames = new Dictionary<(string Protocol, string Name), (IResource Owner, string Name)>(new TransportRouterNameComparer());
 
         foreach (var resource in model.Resources)
         {
@@ -232,9 +231,10 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
                 }
 
-                if (!routerNames.TryAdd((protocol, routerName), resource))
+                if (!routerNames.TryAdd((protocol, routerName), (resource, routerName)))
                 {
-                    throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' is used by both '{routerNames[(protocol, routerName)].Name}' and '{resource.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
+                    var existing = routerNames[(protocol, routerName)];
+                    throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' of resource '{resource.Name}' clashes with '{existing.Name}' of '{existing.Owner.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
                 }
 
                 // An external Traefik's entry points and resolvers aren't known when published.
@@ -585,13 +585,33 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         };
     }
 
+    /// <summary>
+    /// Compares router names by the environment variable name they map to, for example <c>api-v1</c> and <c>API_V1</c>
+    /// both to <c>API_V1</c>.
+    /// </summary>
+    /// <remarks>
+    /// Traefik matches router names case-sensitively in the file provider, but Docker label keys are compared
+    /// case-insensitively by some tooling. The router name is also part of the <c>ASPIRE_TRAEFIK_*</c> variables that
+    /// carry backend addresses and ports (see <see cref="TraefikNames.ToEnvironmentName"/>), so two names that map to
+    /// the same variable would overwrite each other's value.
+    /// </remarks>
+    private sealed class RouterNameComparer : IEqualityComparer<string>
+    {
+        public static RouterNameComparer Instance { get; } = new();
+
+        public bool Equals(string? x, string? y) =>
+            ReferenceEquals(x, y) || (x is not null && y is not null && TraefikNames.ToEnvironmentName(x) == TraefikNames.ToEnvironmentName(y));
+
+        public int GetHashCode(string obj) => TraefikNames.ToEnvironmentName(obj).GetHashCode(StringComparison.Ordinal);
+    }
+
     private sealed class TransportRouterNameComparer : IEqualityComparer<(string Protocol, string Name)>
     {
-        // Case-insensitive like the HTTP router names in ApplyRoutes.
+        // Compared like the HTTP router names in ApplyRoutes.
         public bool Equals((string Protocol, string Name) x, (string Protocol, string Name) y) =>
-            x.Protocol == y.Protocol && string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+            x.Protocol == y.Protocol && RouterNameComparer.Instance.Equals(x.Name, y.Name);
 
         public int GetHashCode((string Protocol, string Name) obj) =>
-            HashCode.Combine(obj.Protocol, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Name));
+            HashCode.Combine(obj.Protocol, RouterNameComparer.Instance.GetHashCode(obj.Name));
     }
 }

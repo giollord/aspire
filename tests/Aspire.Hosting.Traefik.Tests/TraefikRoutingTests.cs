@@ -164,6 +164,35 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
         Assert.Equal("https://api.dev.localhost:8443", await url.GetValueAsync(CancellationToken.None));
     }
 
+    [Fact]
+    public async Task TraefikUrlsWithDifferentSchemesHaveDifferentManifestNames()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+
+        var secure = builder.AddContainer("secure", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "api.example.com");
+
+        var plain = builder.AddContainer("plain", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.example.com");
+                route.EntryPoint = "web";
+            });
+
+        var secureUrl = secure.GetTraefikUrl();
+        var plainUrl = plain.GetTraefikUrl();
+
+        // The manifest writes each conditional once per name, so the two schemes must not share one.
+        Assert.NotEqual(secureUrl.ValueExpression, plainUrl.ValueExpression);
+        Assert.Equal("https://api.example.com", await secureUrl.GetValueAsync(CancellationToken.None));
+        Assert.Equal("http://api.example.com", await plainUrl.GetValueAsync(CancellationToken.None));
+    }
+
     [Theory]
     [InlineData(false, null, "https://api.example.com")]
     [InlineData(true, "web", "http://api.example.com")]
@@ -221,8 +250,11 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
         Assert.Equal("Resource 'api' has no Traefik route. Call WithTraefikRoute first.", exception.Message);
     }
 
-    [Fact]
-    public void DuplicateRouterNamesThrow()
+    [Theory]
+    [InlineData("shared", "Shared")]
+    // Both map to the ASPIRE_TRAEFIK_*_API_V1 variables that carry the backend address and port.
+    [InlineData("api-v1", "api_v1")]
+    public void DuplicateRouterNamesThrow(string first, string second)
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
@@ -233,7 +265,7 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
             .WithTraefikRoute(traefik, route =>
             {
                 route.Host = ReferenceExpression.Create($"a.dev.localhost");
-                route.RouterName = "shared";
+                route.RouterName = first;
             });
 
         builder.AddContainer("b", "image")
@@ -241,13 +273,13 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
             .WithTraefikRoute(traefik, route =>
             {
                 route.Host = ReferenceExpression.Create($"b.dev.localhost");
-                route.RouterName = "Shared";
+                route.RouterName = second;
             });
 
         using var app = builder.Build();
 
         var exception = Assert.Throws<InvalidOperationException>(() => TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false));
-        Assert.Equal("The Traefik router name 'Shared' is used by both 'a' and 'b'. Set TraefikRouteOptions.RouterName to make it unique.", exception.Message);
+        Assert.Equal($"The Traefik router name '{second}' of resource 'b' clashes with '{first}' of 'a'. Set TraefikRouteOptions.RouterName to make it unique.", exception.Message);
     }
 
     [Fact]

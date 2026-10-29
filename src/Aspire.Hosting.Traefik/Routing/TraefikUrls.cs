@@ -72,8 +72,17 @@ internal static class TraefikUrls
     /// <summary>
     /// <c>True</c> when the route is served over HTTPS, read from Traefik's configuration when evaluated.
     /// </summary>
-    private sealed class SecureCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode) : IValueProvider
+    /// <remarks>
+    /// The value expression names exactly the inputs the result depends on, for example
+    /// <c>traefik-https.traefik.default.letsencrypt.publish</c>. A conditional expression is named after a hash of its
+    /// condition's value expression and its branches, and the manifest keeps one conditional per name, so without it
+    /// every Traefik URL would share the name of the first one.
+    /// </remarks>
+    private sealed class SecureCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode) : IValueProvider, IManifestExpressionProvider
     {
+        public string ValueExpression =>
+            $"traefik-https.{traefik.Name}.{options.EntryPoint ?? "default"}.{(isPublishMode ? options.CertResolver ?? "none" : "none")}.{(isPublishMode ? "publish" : "run")}";
+
         public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<string?>(IsSecure(traefik, options, isPublishMode).ToString());
     }
