@@ -169,22 +169,3 @@ public sealed class TraefikRouteOptions
     [AspireExportIgnore(Reason = "Polyglot AppHosts pass middlewares to withTraefikRoute or withTraefikMiddleware.")]
     public IList<TraefikMiddlewareResource> Middlewares { get; } = [];
 }
-
-/// <summary>
-/// The ACME challenge Traefik uses to prove control of a domain.
-/// </summary>
-/// <remarks>
-/// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/"/>.
-/// </remarks>
-public enum TraefikAcmeChallenge
-{
-    /// <summary>
-    /// The TLS-ALPN-01 challenge, answered on the <c>websecure</c> entry point (port 443).
-    /// </summary>
-    TlsAlpn,
-
-    /// <summary>
-    /// The HTTP-01 challenge, answered on the <c>web</c> entry point (port 80).
-    /// </summary>
-    Http,
-}
