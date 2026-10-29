@@ -299,11 +299,14 @@ traefik.PublishAsExternal("traefik", ReferenceExpression.Create($"{entryPoint}")
 - `WithHostPort` / `WithHostHttpsPort` pin the host ports (random in run mode, 80 and 443 at publish time by default).
 - `WithEntryPoint` adds more entry points, for example for TCP traffic.
 - `WithDashboard` enables the Traefik dashboard; see [Traefik dashboard](#traefik-dashboard).
-- Traefik reads its static configuration from command-line arguments, so `WithArgs("--log.level=DEBUG")` adds any other setting.
+- `WithLogLevel(TraefikLogLevel.Debug)` sets the level of Traefik's logs (errors only by default).
+- `WithAccessLogs(logs => logs.StatusCodes.Add("400-599"))` logs requests, in the common or JSON format, optionally filtered by status code, retries, or duration. Request headers are dropped unless listed in `KeepHeaders`. Both logs are Traefik's console output, so they show up in the Aspire dashboard and in `docker compose logs`.
+- Traefik doesn't check for new versions or send usage statistics; the AppHost pins its image version.
+- Traefik reads its static configuration from command-line arguments, so `WithArgs(...)` adds any other setting.
 
 ## Security considerations
 
-At publish time the managed Traefik mounts `/var/run/docker.sock` read-only so the Docker provider can read labels. Access to the Docker socket is powerful even when read-only; consider a socket proxy for internet-facing deployments.
+At publish time the managed Traefik mounts `/var/run/docker.sock` read-only so the Docker provider can read labels. Access to the Docker socket is powerful even when read-only. For internet-facing deployments, use `WithDockerSocketProxy()`: a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) service mounts the socket instead and lets Traefik read containers and events only. The proxy has no authentication, so other services on the application's network can read the container list too. The proxy image comes from a third party and is pinned by digest; to use a mirror or another proxy, replace the image in the callback: `WithDockerSocketProxy(proxy => proxy.WithImageRegistry(...).WithImage(...))`.
 
 ## Additional documentation
 

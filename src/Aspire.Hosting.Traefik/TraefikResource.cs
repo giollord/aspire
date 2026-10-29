@@ -94,6 +94,22 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal EndpointReference? PublishOtlpEndpoint { get; set; }
 
     /// <summary>
+    /// Gets the level of Traefik's logs set with <c>WithLogLevel</c>, if any.
+    /// </summary>
+    internal TraefikLogLevel? LogLevel { get; set; }
+
+    /// <summary>
+    /// Gets the access log options set with <c>WithAccessLogs</c>, if access logs are enabled.
+    /// </summary>
+    internal TraefikAccessLogOptions? AccessLogs { get; set; }
+
+    /// <summary>
+    /// Gets the Docker socket proxy that the Docker provider reads through at publish time, added with
+    /// <c>WithDockerSocketProxy</c>.
+    /// </summary>
+    internal ContainerResource? DockerSocketProxy { get; set; }
+
+    /// <summary>
     /// Gets the custom entry points added with <c>WithEntryPoint</c>.
     /// </summary>
     internal List<TraefikEntryPoint> CustomEntryPoints { get; } = [];

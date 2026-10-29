@@ -12,7 +12,11 @@ var domain = builder.AddParameter("domain");
 builder.AddDockerComposeEnvironment("compose");
 
 var traefik = builder.AddTraefik("traefik")
-    .WithDashboard();
+    .WithDashboard()
+    // When published, Traefik reads the Docker API through a filtering proxy instead of mounting the socket.
+    .WithDockerSocketProxy()
+    // Failed requests only; traces in the Aspire dashboard cover the rest.
+    .WithAccessLogs(logs => logs.StatusCodes.Add("400-599"));
 
 if (builder.ExecutionContext.IsRunMode)
 {

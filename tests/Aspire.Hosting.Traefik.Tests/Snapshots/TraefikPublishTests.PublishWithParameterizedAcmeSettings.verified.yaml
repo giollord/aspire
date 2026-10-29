@@ -6,6 +6,8 @@
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.traefik.address=:8080"
       - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
+      - "--global.checknewversion=false"
+      - "--global.sendanonymoususage=false"
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"

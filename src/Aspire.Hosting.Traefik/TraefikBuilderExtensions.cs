@@ -17,6 +17,11 @@ public static partial class TraefikBuilderExtensions
 {
     private const string DockerSocketPath = "/var/run/docker.sock";
 
+    internal const string SocketProxyEndpointName = "docker";
+
+    // The port docker-socket-proxy serves the filtered Docker API on.
+    private const int SocketProxyPort = 2375;
+
     /// <summary>
     /// Adds a Traefik Proxy container to the application model.
     /// </summary>
@@ -547,6 +552,184 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
+    /// Sets the level of Traefik's own logs, which show up as the resource's console logs.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="level">The minimum level that is logged.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// Traefik logs errors only by default. <see cref="TraefikLogLevel.Debug"/> shows the configuration Traefik receives
+    /// from each provider, which helps when a route doesn't match. See
+    /// <see href="https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/"/>.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithLogLevel(this IResourceBuilder<TraefikResource> builder, TraefikLogLevel level)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Resource.LogLevel = level;
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Enables Traefik's access logs, one line per request, which show up as the resource's console logs.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="configure">Sets the format and the filters of the access logs.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// Request headers are dropped unless listed in <see cref="TraefikAccessLogOptions.KeepHeaders"/>, because they can
+    /// carry credentials or personal data. Traces in the Aspire dashboard already show each request; access logs are
+    /// mostly useful when published. See
+    /// <see href="https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/#accesslogs"/>.
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// traefik.WithAccessLogs(logs =>
+    /// {
+    ///     logs.Format = TraefikAccessLogFormat.Json;
+    ///     logs.StatusCodes.Add("400-599");
+    /// });
+    /// </code>
+    /// </example>
+    [AspireExport(RunSyncOnBackgroundThread = true)]
+    public static IResourceBuilder<TraefikResource> WithAccessLogs(this IResourceBuilder<TraefikResource> builder, Action<TraefikAccessLogOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var options = new TraefikAccessLogOptions();
+        configure?.Invoke(options);
+
+        foreach (var statusCode in options.StatusCodes)
+        {
+            if (statusCode is null || !StatusCodeRangeRegex().IsMatch(statusCode))
+            {
+                throw new ArgumentException($"The status code filter '{statusCode}' is invalid. Use a code or a range, for example '404' or '500-599'.", nameof(configure));
+            }
+        }
+
+        foreach (var header in options.KeepHeaders)
+        {
+            // The header name is a segment of the option path, so it can't contain '.' or '='.
+            if (header is null || !HeaderNameRegex().IsMatch(header))
+            {
+                throw new ArgumentException($"The header name '{header}' is invalid.", nameof(configure));
+            }
+        }
+
+        if (options.MinDuration is { } minDuration)
+        {
+            TraefikNames.ToDuration(minDuration, nameof(configure));
+        }
+
+        builder.Resource.AccessLogs = options;
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Reads the Docker API through a socket proxy at publish time, instead of mounting the Docker socket into Traefik.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="configure">Customizes the proxy container, for example to use an image from your own registry. Only called when publishing.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// Access to the Docker socket is access to the host, even read-only, so an internet-facing proxy is better off
+    /// without it. This adds a <see href="https://github.com/Tecnativa/docker-socket-proxy">docker-socket-proxy</see>
+    /// service named <c>&lt;name&gt;-socket-proxy</c> that mounts the socket and allows only the endpoints the Docker
+    /// provider uses (listing and inspecting containers, and events), and points Traefik's Docker provider at it.
+    /// </para>
+    /// <para>
+    /// The image is a third-party one, pinned by digest so that it can't change without an update of this package. To
+    /// use a mirror or another proxy with the same environment variables, such as
+    /// <see href="https://github.com/linuxserver/docker-socket-proxy">linuxserver/socket-proxy</see>, replace the image
+    /// in <paramref name="configure"/> with <c>WithImage</c> and <c>WithImageRegistry</c>. The digest only applies while
+    /// the image is the default one; call <c>WithImageSHA256</c> to pin a replacement.
+    /// </para>
+    /// <para>
+    /// The proxy listens without authentication on the application's network, where other services could read the
+    /// container list too. It has no effect in run mode, where Traefik reads a file instead, or with
+    /// <c>PublishAsExternal</c>, where Traefik isn't deployed.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// traefik.WithDockerSocketProxy(proxy => proxy
+    ///     .WithImageRegistry("registry.example.com")
+    ///     .WithImage("mirror/docker-socket-proxy", "v0.5.0"));
+    /// </code>
+    /// </example>
+    [AspireExport(RunSyncOnBackgroundThread = true)]
+    public static IResourceBuilder<TraefikResource> WithDockerSocketProxy(this IResourceBuilder<TraefikResource> builder, Action<IResourceBuilder<ContainerResource>>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var resource = builder.Resource;
+        if (!builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
+        {
+            return builder;
+        }
+
+        if (resource.DockerSocketProxy is { } existing)
+        {
+            if (configure is not null)
+            {
+                configure(builder.ApplicationBuilder.CreateResourceBuilder(existing));
+                PinDefaultSocketProxyImage(existing);
+            }
+
+            return builder;
+        }
+
+        var proxy = builder.ApplicationBuilder.AddContainer($"{resource.Name}-socket-proxy", TraefikContainerImageTags.SocketProxyImage, TraefikContainerImageTags.SocketProxyTag)
+            .WithImageRegistry(TraefikContainerImageTags.SocketProxyRegistry)
+            .WithBindMount(DockerSocketPath, DockerSocketPath, isReadOnly: true)
+            // Only the container endpoints; EVENTS, PING, and VERSION are allowed by default, and POST requests are not.
+            // https://github.com/Tecnativa/docker-socket-proxy#grant-or-revoke-access-to-certain-api-sections
+            .WithEnvironment("CONTAINERS", "1")
+            .WithEndpoint(targetPort: SocketProxyPort, scheme: "tcp", name: SocketProxyEndpointName);
+
+        resource.DockerSocketProxy = proxy.Resource;
+        configure?.Invoke(proxy);
+        PinDefaultSocketProxyImage(proxy.Resource);
+
+        foreach (var mount in resource.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == DockerSocketPath).ToList())
+        {
+            resource.Annotations.Remove(mount);
+        }
+
+        builder.WaitFor(proxy);
+
+        builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
+        {
+            // PublishAsExternal may be called after this method. Without the Traefik service, the proxy has no client.
+            if (resource.PublishExternal is not null)
+            {
+                proxy.ExcludeFromManifest();
+            }
+
+            return Task.CompletedTask;
+        });
+
+        return builder;
+    }
+
+    private static void PinDefaultSocketProxyImage(ContainerResource proxy)
+    {
+        // Pin only the image this package chose. WithImage keeps an existing digest, so pinning before `configure` would
+        // pin a mirror or replacement image to the digest of a different image.
+        if (proxy.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault() is { } image &&
+            image.Registry == TraefikContainerImageTags.SocketProxyRegistry &&
+            image.Image == TraefikContainerImageTags.SocketProxyImage &&
+            image.Tag == TraefikContainerImageTags.SocketProxyTag)
+        {
+            image.SHA256 ??= TraefikContainerImageTags.SocketProxySha256;
+        }
+    }
+
+    /// <summary>
     /// Makes a certificate resolver prove control of the domains with the ACME DNS-01 challenge, through a DNS provider's
     /// API.
     /// </summary>
@@ -1004,6 +1187,14 @@ public static partial class TraefikBuilderExtensions
             _ => throw new ArgumentException($"Unsupported type '{value.GetType().Name}'. Expected a string or a reference expression.", parameterName),
         };
     }
+
+    // A status code or a range, for example `404` or `500-599`, as Traefik's access log filter reads them.
+    [GeneratedRegex("^[1-5][0-9]{2}(-[1-5][0-9]{2})?$")]
+    private static partial Regex StatusCodeRangeRegex();
+
+    // HTTP header field names are tokens (RFC 9110, section 5.1), without '.', which separates option path segments.
+    [GeneratedRegex("^[A-Za-z0-9!#$%&'*+^_`|~-]+$")]
+    private static partial Regex HeaderNameRegex();
 
     // lego provider names, for example `cloudflare`, `route53`, `azuredns`, or `ovh`.
     [GeneratedRegex("^[a-z0-9][a-z0-9.-]*$")]

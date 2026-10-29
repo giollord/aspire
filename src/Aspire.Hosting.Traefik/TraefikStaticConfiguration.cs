@@ -42,11 +42,27 @@ internal static class TraefikStaticConfiguration
 
         AddEntryPoints(traefik, args, isPublishMode);
 
+        // Traefik checks for new versions over the internet on every start unless told not to, and anonymous usage
+        // statistics are off by default but stay off explicitly. An application's proxy shouldn't call home; the
+        // image version is pinned by the AppHost anyway.
+        // https://doc.traefik.io/traefik/contributing/data-collection/
+        args.Add("--global.checknewversion=false");
+        args.Add("--global.sendanonymoususage=false");
+
+        AddLogs(traefik, args);
+
         // `/ping` backs the resource health check in run mode and is cheap to keep at publish time, where it
         // serves `traefik healthcheck` and external monitoring.
         args.Add("--ping=true");
 
         AddProviders(args, isPublishMode, traefik.HasPublishFileConfiguration);
+
+        if (isPublishMode && traefik.DockerSocketProxy is { } socketProxy)
+        {
+            // The proxy forwards only the read-only container endpoints the Docker provider needs, instead of the whole
+            // Docker API. https://doc.traefik.io/traefik/reference/install-configuration/providers/docker/#endpoint
+            args.Add(ReferenceExpression.Create($"--providers.docker.endpoint=tcp://{socketProxy.GetEndpoint(TraefikBuilderExtensions.SocketProxyEndpointName).Property(EndpointProperty.HostAndPort)}"));
+        }
 
         if (traefik.DashboardEnabled)
         {
@@ -146,6 +162,48 @@ internal static class TraefikStaticConfiguration
                 ? $"{redirectTo}{TraefikResource.WebSecureEntryPointName}"
                 : ReferenceExpression.Create($"{redirectTo}:{GetHostEndpoint(traefik, TraefikResource.WebSecureEntryPointName).Property(EndpointProperty.Port)}"));
             args.Add($"--entrypoints.{TraefikResource.WebEntryPointName}.http.redirections.entrypoint.scheme=https");
+        }
+    }
+
+    private static void AddLogs(TraefikResource traefik, IList<object> args)
+    {
+        // Both go to stdout, which Aspire shows as the resource's console logs.
+        // https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+        if (traefik.LogLevel is { } level)
+        {
+            args.Add($"--log.level={level.ToString().ToUpperInvariant()}");
+        }
+
+        if (traefik.AccessLogs is not { } accessLogs)
+        {
+            return;
+        }
+
+        args.Add("--accesslog=true");
+
+        if (accessLogs.Format is TraefikAccessLogFormat.Json)
+        {
+            args.Add("--accesslog.format=json");
+        }
+
+        if (accessLogs.StatusCodes.Count > 0)
+        {
+            args.Add($"--accesslog.filters.statuscodes={string.Join(",", accessLogs.StatusCodes)}");
+        }
+
+        if (accessLogs.RetryAttempts)
+        {
+            args.Add("--accesslog.filters.retryattempts=true");
+        }
+
+        if (accessLogs.MinDuration is { } minDuration)
+        {
+            args.Add($"--accesslog.filters.minduration={TraefikNames.ToDuration(minDuration, "configure")}");
+        }
+
+        foreach (var header in accessLogs.KeepHeaders)
+        {
+            args.Add($"--accesslog.fields.headers.names.{header}=keep");
         }
     }
 

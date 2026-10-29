@@ -37,6 +37,7 @@ In the Aspire dashboard:
 - The `whoami` and `api` resources show their public URLs; the direct `localhost` URLs are in the resource details.
 - **Traces**: a request to `api.dev.localhost` is one trace with a Traefik span and an `api` span.
 - **Metrics**: select `traefik` for request counts and durations per entry point, router, and service.
+- **Console logs**: `traefik` logs failed requests (status 400 to 599) as access logs; open a host without a route to see one.
 
 Browsers resolve `*.localhost` to the local machine. Other tools may not; with curl, send the host explicitly:
 
@@ -56,7 +57,7 @@ To publish with one wildcard certificate for `*.${DOMAIN}` through the DNS-01 ch
 aspire publish -o ./out
 ```
 
-`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them. Traefik's own configuration, the dashboard router on `traefik.${DOMAIN}` and the entry-point middleware, is the `traefik-dynamic` config.
+`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them. Traefik's own configuration, the dashboard router on `traefik.${DOMAIN}` and the entry-point middleware, is the `traefik-dynamic` config. Traefik reads the Docker API through the `traefik-socket-proxy` service and doesn't mount the Docker socket itself.
 
 When published, Keycloak and oauth2-proxy use `https://auth.${DOMAIN}` and `https://secure.${DOMAIN}`; the realm's redirect URI follows from `GetTraefikUrl()`.
 

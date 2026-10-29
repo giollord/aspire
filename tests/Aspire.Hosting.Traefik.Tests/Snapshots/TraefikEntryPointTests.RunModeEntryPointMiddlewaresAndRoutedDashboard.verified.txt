@@ -5,6 +5,8 @@
     --entrypoints.traefik.address=:8080,
     --entrypoints.websecure.http.tls=true,
     --entrypoints.websecure.http.middlewares=security-headers@file,limit@file,
+    --global.checknewversion=false,
+    --global.sendanonymoususage=false,
     --ping=true,
     --providers.file.directory=/etc/traefik/dynamic,
     --api.dashboard=true,

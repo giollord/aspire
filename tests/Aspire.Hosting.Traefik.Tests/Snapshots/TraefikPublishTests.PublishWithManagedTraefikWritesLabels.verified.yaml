@@ -20,6 +20,8 @@
       - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--global.checknewversion=false"
+      - "--global.sendanonymoususage=false"
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"

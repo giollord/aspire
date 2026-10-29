@@ -4,6 +4,8 @@
     command:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.traefik.address=:8080"
+      - "--global.checknewversion=false"
+      - "--global.sendanonymoususage=false"
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
