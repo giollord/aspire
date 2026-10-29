@@ -43,7 +43,7 @@ public sealed class TraefikTcpRouteOptions
     /// </summary>
     /// <remarks>
     /// At publish time the certificate comes from <see cref="CertResolver"/> or the default resolver, as for HTTP
-    /// routes. In run mode Traefik uses its self-signed default certificate.
+    /// routes. In run mode Traefik uses its default certificate, the HTTPS certificate from Aspire.
     /// </remarks>
     public bool Tls { get; set; }
 

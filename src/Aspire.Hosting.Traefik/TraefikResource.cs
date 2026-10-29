@@ -186,7 +186,8 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
         {
             // Let's Encrypt can't issue certificates for a local `aspire run`: the ACME server must reach the
             // machine on public ports 80/443 under a public DNS name. Run mode therefore still terminates TLS on
-            // `websecure`, but with Traefik's built-in self-signed default certificate and no resolver.
+            // `websecure`, but with the Aspire HTTPS certificate (the developer certificate) as Traefik's default
+            // certificate and no resolver; see TraefikDynamicConfiguration.TlsFileContent.
             var resolver = isPublishMode ? ReferenceExpression.Create($"{DefaultAcmeResolver!.Name}") : null;
             return new(ReferenceExpression.Create($"{WebSecureEntryPointName}"), Tls: true, resolver, Network: null, IsSecure: true);
         }

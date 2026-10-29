@@ -30,7 +30,7 @@ if (builder.ExecutionContext.IsRunMode)
 
 if (builder.Configuration.GetValue<bool>("Traefik:EnableHttps"))
 {
-    // In run mode this serves HTTPS with Traefik's self-signed certificate; Let's Encrypt is only used when published.
+    // In run mode this serves HTTPS with the Aspire developer certificate; Let's Encrypt is only used when published.
     traefik
         .WithLetsEncrypt(builder.AddParameter("acme-email"))
         .WithHttpsRedirect();

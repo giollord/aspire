@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable ASPIRECERTIFICATES001 // WithHttpsCertificateConfiguration is experimental.
+
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
@@ -171,12 +173,34 @@ public static partial class TraefikBuilderExtensions
                         }
                     }
                 })
+                // Serve the Aspire developer certificate (or one set with WithHttpsCertificate) instead of Traefik's
+                // self-signed default, so browsers trust https://*.dev.localhost. Aspire only invokes this callback
+                // when a certificate is available, and WithoutHttpsCertificate turns it off. The file paths contain the
+                // certificate's thumbprint and are only known here, so they go through the environment into
+                // TraefikDynamicConfiguration.TlsFileContent instead of the generated routes file.
+                .WithHttpsCertificateConfiguration(context =>
+                {
+                    // Traefik reads PEM files and can't decrypt a password-protected key, so a certificate with a
+                    // password keeps Traefik's default certificate.
+                    if (context.Password is null)
+                    {
+                        context.EnvironmentVariables[TraefikDynamicConfiguration.TlsCertificateVariable] = context.CertificatePath;
+                        context.EnvironmentVariables[TraefikDynamicConfiguration.TlsKeyVariable] = context.KeyPath;
+                    }
+
+                    return Task.CompletedTask;
+                })
                 .WithContainerFiles(TraefikResource.DynamicConfigurationDirectory, async (_, cancellationToken) =>
                 [
                     new ContainerFile
                     {
                         Name = TraefikDynamicConfiguration.FileName,
                         Contents = await TraefikDynamicConfiguration.GenerateAsync(resource, executionContext, cancellationToken).ConfigureAwait(false),
+                    },
+                    new ContainerFile
+                    {
+                        Name = TraefikDynamicConfiguration.TlsFileName,
+                        Contents = TraefikDynamicConfiguration.TlsFileContent,
                     },
                 ]);
         }
@@ -565,8 +589,10 @@ public static partial class TraefikBuilderExtensions
     /// </para>
     /// <para>
     /// Let's Encrypt can't issue certificates for a local run, because it must reach the machine on public ports
-    /// 80 and 443 under a public DNS name. In run mode HTTPS still works on <c>websecure</c>, with Traefik's
-    /// self-signed default certificate.
+    /// 80 and 443 under a public DNS name. In run mode HTTPS still works on <c>websecure</c>, with the HTTPS certificate
+    /// from Aspire: the ASP.NET Core developer certificate, which browsers trust for <c>localhost</c> and
+    /// <c>*.dev.localhost</c> once it's trusted (<c>dotnet dev-certs https --trust</c>), unless <c>WithHttpsCertificate</c> sets another one or <c>WithoutHttpsCertificate</c> turns
+    /// it off. Without one, Traefik uses its self-signed default certificate.
     /// </para>
     /// <para>
     /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/"/>.
@@ -885,8 +911,8 @@ public static partial class TraefikBuilderExtensions
     /// challenge (<c>WithDnsChallenge</c>) on the default resolver.
     /// </para>
     /// <para>
-    /// The domains only apply to the managed Traefik at publish time; in run mode Traefik uses its self-signed
-    /// certificate. See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls"/>.
+    /// The domains only apply to the managed Traefik at publish time; in run mode Traefik uses the HTTPS certificate from
+    /// Aspire (see <c>WithLetsEncrypt</c>). See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls"/>.
     /// </para>
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTlsDomain export, which accepts strings or reference expressions.")]

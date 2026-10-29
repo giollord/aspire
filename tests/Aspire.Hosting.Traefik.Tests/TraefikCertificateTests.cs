@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREPIPELINES003
+#pragma warning disable ASPIRECERTIFICATES001
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Publishing;
@@ -131,5 +132,67 @@ public class TraefikCertificateTests(ITestOutputHelper testOutputHelper)
 
         var exception = Assert.Throws<InvalidOperationException>(() => TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false));
         Assert.Equal("The Traefik route 'api' of resource 'api' uses the certificate resolver 'dns', which 'traefik' doesn't have. Add it with WithLetsEncrypt.", exception.Message);
+    }
+
+    [Fact]
+    public async Task RunModeServesTheAspireHttpsCertificate()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+
+        var withoutPassword = await InvokeCertificateCallbackAsync(traefik.Resource, builder, password: null);
+        var withPassword = await InvokeCertificateCallbackAsync(traefik.Resource, builder, password: builder.AddParameter("pfx-password", "secret", secret: true).Resource);
+
+        await Verify(new
+        {
+            WithoutPassword = withoutPassword,
+            // A password-protected key can't be read by Traefik, which keeps its own default certificate.
+            WithPassword = withPassword,
+            TlsFile = TraefikDynamicConfiguration.TlsFileContent,
+        });
+    }
+
+    [Fact]
+    public void PublishDoesNotUseTheAspireHttpsCertificate()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+
+        // Published Traefik gets its certificates from Let's Encrypt.
+        Assert.Empty(traefik.Resource.Annotations.OfType<HttpsCertificateConfigurationCallbackAnnotation>());
+    }
+
+    private static async Task<Dictionary<string, string?>> InvokeCertificateCallbackAsync(TraefikResource traefik, IDistributedApplicationBuilder builder, IValueProvider? password)
+    {
+        var context = new HttpsCertificateConfigurationCallbackAnnotationContext
+        {
+            ExecutionContext = builder.ExecutionContext,
+            Resource = traefik,
+            Arguments = [],
+            EnvironmentVariables = [],
+            CertificatePath = ReferenceExpression.Create($"/certs/ABC.crt"),
+            KeyPath = ReferenceExpression.Create($"/certs/ABC.key"),
+            CertificateWithKeyPath = ReferenceExpression.Create($"/certs/ABC.pem"),
+            PfxPath = ReferenceExpression.Create($"/certs/ABC.pfx"),
+            Password = password,
+            CancellationToken = CancellationToken.None,
+        };
+
+        foreach (var annotation in traefik.Annotations.OfType<HttpsCertificateConfigurationCallbackAnnotation>())
+        {
+            await annotation.Callback(context);
+        }
+
+        var values = new Dictionary<string, string?>();
+        foreach (var (name, value) in context.EnvironmentVariables)
+        {
+            values[name] = value is ReferenceExpression expression ? await expression.GetValueAsync(CancellationToken.None) : value.ToString();
+        }
+
+        return values;
     }
 }

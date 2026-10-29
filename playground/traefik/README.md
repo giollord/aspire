@@ -51,7 +51,7 @@ curl -H "Host: api.dev.localhost" http://127.0.0.1:8000/
 
 ## HTTPS
 
-Set `Traefik:EnableHttps` to `true` to add the `websecure` entry point with a redirect from HTTP. In run mode Traefik uses its self-signed certificate, so the browser shows a warning. Let's Encrypt is only used when published.
+Set `Traefik:EnableHttps` to `true` to add the `websecure` entry point with a redirect from HTTP. In run mode Traefik serves the ASP.NET Core developer certificate, which covers `*.dev.localhost`, so the browser trusts `https://whoami.dev.localhost:8443` once the certificate is trusted (`dotnet dev-certs https --trust`). Let's Encrypt is only used when published.
 
 To publish with one wildcard certificate for `*.${DOMAIN}` through the DNS-01 challenge, also set `Traefik:DnsProvider` (a [lego provider](https://go-acme.github.io/lego/dns/), for example `cloudflare`) and `Traefik:DnsCredentialName` (its credential variable, for example `CF_DNS_API_TOKEN`). The credential is the `DNS_CREDENTIAL` variable of the published `.env` file.
 

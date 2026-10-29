@@ -37,6 +37,36 @@ internal static class TraefikDynamicConfiguration
 {
     internal const string FileName = "aspire.yml";
 
+    internal const string TlsFileName = "aspire-tls.yml";
+
+    internal const string TlsCertificateVariable = "ASPIRE_TRAEFIK_TLS_CERTIFICATE";
+
+    internal const string TlsKeyVariable = "ASPIRE_TRAEFIK_TLS_KEY";
+
+    /// <summary>
+    /// The run-mode file that makes the HTTPS certificate from Aspire Traefik's default certificate, which every TLS router
+    /// without a certificate of its own presents.
+    /// </summary>
+    /// <remarks>
+    /// The certificate paths are only known when the container is created (see <c>AddTraefik</c>), so the file reads them
+    /// from the environment with the file provider's Go templating. Without a certificate the variables are unset, the
+    /// file renders empty, and Traefik keeps its self-signed default certificate.
+    /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/providers/others/file/#go-templating"/>
+    /// and <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/tls/tls-certificates/#default-certificate"/>.
+    /// </remarks>
+    internal const string TlsFileContent =
+        $$$"""
+        {{- if env "{{{TlsCertificateVariable}}}" }}
+        tls:
+          stores:
+            default:
+              defaultCertificate:
+                certFile: {{ env "{{{TlsCertificateVariable}}}" | quote }}
+                keyFile: {{ env "{{{TlsKeyVariable}}}" | quote }}
+        {{- end }}
+
+        """;
+
     // The service Traefik creates for its API and dashboard. It exists once `api.dashboard` is enabled.
     // https://doc.traefik.io/traefik/reference/install-configuration/api-dashboard/
     private const string DashboardService = "api@internal";
