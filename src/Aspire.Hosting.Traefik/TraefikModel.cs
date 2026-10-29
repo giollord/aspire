@@ -41,9 +41,6 @@ internal sealed record TraefikRouteDefaults(ReferenceExpression EntryPoint, bool
 }
 
 /// <summary>
-/// An ACME certificate resolver configured with <c>WithLetsEncrypt</c>.
-/// </summary>
-/// <summary>
 /// An ACME certificate resolver added with <c>WithLetsEncrypt</c>.
 /// </summary>
 /// <remarks>
@@ -89,7 +86,10 @@ internal sealed record TraefikExternalSettings(string Network, ReferenceExpressi
 /// <summary>
 /// A custom entry point added with <c>WithEntryPoint</c>.
 /// </summary>
-internal sealed record TraefikEntryPoint(string Name, int TargetPort);
+/// <param name="Name">The name of the entry point and of its endpoint.</param>
+/// <param name="TargetPort">The port Traefik listens on inside the container.</param>
+/// <param name="IsUdp">Whether the entry point listens for UDP datagrams instead of TCP connections.</param>
+internal sealed record TraefikEntryPoint(string Name, int TargetPort, bool IsUdp);
 
 /// <summary>
 /// A Docker Compose config holding the dynamic configuration of a managed Traefik at publish time.
@@ -109,6 +109,17 @@ internal sealed record TraefikPublishFileConfiguration(DockerComposeEnvironmentR
 /// oauth2-proxy. Such routes are recreated whenever the routes are applied.
 /// </param>
 internal sealed record TraefikRouteAnnotation(TraefikResource Traefik, TraefikRouteOptions Options, bool IsSignInRoute = false) : IResourceAnnotation;
+
+/// <summary>
+/// Records a TCP route declared on a routed resource with <c>WithTraefikTcpRoute</c>.
+/// </summary>
+internal sealed record TraefikTcpRouteAnnotation(TraefikResource Traefik, TraefikTcpRouteOptions Options) : IResourceAnnotation;
+
+/// <summary>
+/// Records a UDP route declared on a routed resource with <c>WithTraefikUdpRoute</c>. UDP routers have no rule: every
+/// datagram on the entry point goes to the route's service.
+/// </summary>
+internal sealed record TraefikUdpRouteAnnotation(TraefikResource Traefik, string EntryPoint, string? EndpointName) : IResourceAnnotation;
 
 /// <summary>
 /// Marks a resource that already joins an external Traefik's shared network because a middleware calls it.
@@ -131,3 +142,26 @@ internal sealed record TraefikRoute(
     EndpointReference Endpoint,
     TraefikRouteOptions Options,
     IReadOnlyList<TraefikMiddlewareResource> Middlewares);
+
+/// <summary>
+/// A TCP or UDP route resolved by <see cref="TraefikRoutingSubscriber"/>.
+/// </summary>
+/// <param name="Traefik">The Traefik resource that receives the connections.</param>
+/// <param name="Resource">The routed resource.</param>
+/// <param name="RouterName">The name of the router and of its service.</param>
+/// <param name="Endpoint">The endpoint of the routed resource that receives the connections.</param>
+/// <param name="EntryPoint">The entry point the router listens on.</param>
+/// <param name="Tcp">The options of a TCP route, or <see langword="null"/> for a UDP route.</param>
+internal sealed record TraefikTransportRoute(
+    TraefikResource Traefik,
+    IResourceWithEndpoints Resource,
+    string RouterName,
+    EndpointReference Endpoint,
+    string EntryPoint,
+    TraefikTcpRouteOptions? Tcp)
+{
+    /// <summary>
+    /// Gets the configuration section of the route: <c>tcp</c> or <c>udp</c>.
+    /// </summary>
+    public string Protocol => Tcp is null ? "udp" : "tcp";
+}

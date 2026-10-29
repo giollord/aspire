@@ -24,6 +24,8 @@ aspire run
 | `http://auth.dev.localhost:8000` | Keycloak | The Keycloak realm `traefik-demo`, imported from `Traefik.AppHost/Realms`. |
 | Traefik resource → **Dashboard** link | Traefik API | The Traefik dashboard with the generated routers and services. |
 | `http://traefik.dev.localhost:8000/dashboard/` | Traefik API | The same dashboard, routed on a host behind basic authentication (`admin` / `admin`). |
+| `127.0.0.1:9000` (TCP) | `traefik/whoamitcp` container | A TCP route on the `echo-tcp` entry point: send a line, for example with `ncat 127.0.0.1 9000`, and it comes back as `Received: ...`. |
+| `127.0.0.1:9001` (UDP) | `traefik/whoamiudp` container | A UDP route on the `echo-udp` entry point: `ncat -u 127.0.0.1 9001` echoes datagrams the same way. |
 
 Middlewares:
 
@@ -31,6 +33,8 @@ Middlewares:
 - Every router on the default entry point gets the `served-by` entry-point middleware, which adds `X-Served-By: aspire-traefik` to responses.
 - `api` (all routes) is rate-limited to 20 requests per second with bursts of 40; more get `429`.
 - The middlewares appear under `traefik` in the Aspire dashboard and in the Traefik dashboard.
+
+Health checks: `whoami` has a readiness probe on `/health`, which Traefik also uses as its health check. `curl -X POST -d 500 -H "Host: whoami.dev.localhost" http://127.0.0.1:8000/health` makes whoami report unhealthy; a few seconds later Traefik answers `503` for it. Traefik no longer forwards to it then, so post `200` to whoami's direct `localhost` URL, shown in its resource details, to bring it back. Note that the probe also marks the resource unhealthy in the Aspire dashboard.
 
 In the Aspire dashboard:
 

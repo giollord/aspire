@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
+using System.Net.Sockets;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Resources.ServiceNodes;
@@ -41,6 +43,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         foreach (var traefik in model.Resources.OfType<TraefikResource>())
         {
             traefik.Routes.Clear();
+            traefik.TransportRoutes.Clear();
         }
 
         AddSignInRoutes(model, isPublishMode);
@@ -124,7 +127,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 {
                     if (resource is IResourceWithEnvironment resourceWithEnvironment)
                     {
-                        TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, route);
+                        TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), route.Endpoint);
                     }
 
                     var defaults = ((ITraefikRouteTarget)annotation.Traefik).GetRouteDefaults(isPublishMode: true);
@@ -166,7 +169,142 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             }
         }
 
+        ApplyTransportRoutes(model, isPublishMode, publishesToDockerCompose);
         SetErrorPageServices(model);
+    }
+
+    /// <summary>
+    /// Resolves the TCP and UDP routes, like <see cref="ApplyRoutes"/> does for HTTP routes.
+    /// </summary>
+    private static void ApplyTransportRoutes(DistributedApplicationModel model, bool isPublishMode, bool publishesToDockerCompose)
+    {
+        // TCP and UDP routers live in their own namespaces in Traefik (`tcp.routers`, `udp.routers`), so a name only has
+        // to be unique within its protocol.
+        var routerNames = new Dictionary<(string Protocol, string Name), IResource>(new TransportRouterNameComparer());
+
+        foreach (var resource in model.Resources)
+        {
+            var annotations = resource.Annotations
+                .Where(a => a is TraefikTcpRouteAnnotation or TraefikUdpRouteAnnotation)
+                .ToList();
+            if (annotations.Count == 0)
+            {
+                continue;
+            }
+
+            if (resource is not IResourceWithEndpoints resourceWithEndpoints)
+            {
+                throw new InvalidOperationException($"Resource '{resource.Name}' is routed through Traefik but has no endpoints.");
+            }
+
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var routes = new List<TraefikTransportRoute>(annotations.Count);
+
+            foreach (var annotation in annotations)
+            {
+                var (traefik, tcp, entryPoint, endpointName, routerName) = annotation switch
+                {
+                    TraefikTcpRouteAnnotation t => (t.Traefik, t.Options, t.Options.EntryPoint!, t.Options.EndpointName, t.Options.RouterName),
+                    TraefikUdpRouteAnnotation u => (u.Traefik, (TraefikTcpRouteOptions?)null, u.EntryPoint, u.EndpointName, (string?)null),
+                    _ => throw new UnreachableException(),
+                };
+
+                var protocol = tcp is null ? "udp" : "tcp";
+                var index = counts[protocol] = counts.GetValueOrDefault(protocol) + 1;
+                routerName ??= index == 1 ? resource.Name : $"{resource.Name}-{index}";
+
+                if (!TraefikNames.IsValidName(routerName))
+                {
+                    throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
+                }
+
+                if (!routerNames.TryAdd((protocol, routerName), resource))
+                {
+                    throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' is used by both '{routerNames[(protocol, routerName)].Name}' and '{resource.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
+                }
+
+                // An external Traefik's entry points and resolvers aren't known when published.
+                if (!isPublishMode || traefik.PublishExternal is null)
+                {
+                    ValidateTransportEntryPoint(traefik, resource, routerName, entryPoint, isUdp: tcp is null);
+
+                    if (tcp?.CertResolver is { } certResolver && !traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        throw new InvalidOperationException($"The Traefik TCP route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
+                    }
+                }
+
+                var endpoint = ResolveTransportEndpoint(resourceWithEndpoints, endpointName, protocol);
+                var route = new TraefikTransportRoute(traefik, resourceWithEndpoints, routerName, endpoint, entryPoint, tcp);
+
+                traefik.TransportRoutes.Add(route);
+                routes.Add(route);
+
+                if (publishesToDockerCompose)
+                {
+                    if (resource is IResourceWithEnvironment resourceWithEnvironment)
+                    {
+                        TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), endpoint);
+                    }
+
+                    var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
+                    resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation(
+                        (composeService, service) => TraefikDockerLabels.Apply(composeService, service, route, defaults)));
+                }
+            }
+
+            if (!isPublishMode)
+            {
+                foreach (var traefik in routes.Select(r => r.Traefik).Distinct())
+                {
+                    if (!traefik.Annotations.OfType<ResourceRelationshipAnnotation>().Any(a => a.Resource == resource && a.Type == "Route"))
+                    {
+                        traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, "Route"));
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ValidateTransportEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, bool isUdp)
+    {
+        var custom = traefik.CustomEntryPoints.FirstOrDefault(e => e.Name == entryPoint);
+        var exists = custom is not null
+            || entryPoint == TraefikResource.WebEntryPointName
+            || (entryPoint == TraefikResource.WebSecureEntryPointName && traefik.HasWebSecureEntryPoint);
+
+        if (!exists)
+        {
+            throw new InvalidOperationException($"The Traefik {(isUdp ? "UDP" : "TCP")} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint.");
+        }
+
+        if (isUdp != (custom?.IsUdp ?? false))
+        {
+            throw new InvalidOperationException(isUdp
+                ? $"The Traefik UDP route '{routerName}' of resource '{resource.Name}' needs a UDP entry point, but '{entryPoint}' listens for TCP. Add one with WithEntryPoint(name, targetPort, scheme: \"udp\")."
+                : $"The Traefik TCP route '{routerName}' of resource '{resource.Name}' needs a TCP entry point, but '{entryPoint}' listens for UDP.");
+        }
+    }
+
+    private static EndpointReference ResolveTransportEndpoint(IResourceWithEndpoints resource, string? endpointName, string protocol)
+    {
+        var endpoints = resource.Annotations.OfType<EndpointAnnotation>().ToList();
+        var annotation = endpointName is not null
+            ? endpoints.FirstOrDefault(e => string.Equals(e.Name, endpointName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.")
+            : endpoints.FirstOrDefault(e => string.Equals(e.Name, protocol, StringComparison.OrdinalIgnoreCase))
+                ?? (endpoints.Count == 1
+                    ? endpoints[0]
+                    : throw new InvalidOperationException($"Resource '{resource.Name}' has {(endpoints.Count == 0 ? "no endpoints" : "several endpoints and none is named '" + protocol + "'")}. Set the endpoint name of its Traefik {protocol.ToUpperInvariant()} route."));
+
+        // A TCP route can target any TCP endpoint, including an HTTP one, but datagrams can only go to a UDP port.
+        var expected = protocol == "udp" ? ProtocolType.Udp : ProtocolType.Tcp;
+        if (annotation.Protocol != expected)
+        {
+            throw new InvalidOperationException($"The endpoint '{annotation.Name}' of resource '{resource.Name}' uses {annotation.Protocol}, so it can't receive a Traefik {protocol.ToUpperInvariant()} route.");
+        }
+
+        return resource.GetEndpoint(annotation.Name);
     }
 
     private static void ApplyPublishFileConfiguration(TraefikResource traefik)
@@ -431,5 +569,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             0 => throw new InvalidOperationException($"Resource '{resource.Name}' has no HTTP endpoint to route Traefik traffic to."),
             _ => throw new InvalidOperationException($"Resource '{resource.Name}' has several HTTP endpoints and none is named 'http'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.EndpointName)} to choose one."),
         };
+    }
+
+    private sealed class TransportRouterNameComparer : IEqualityComparer<(string Protocol, string Name)>
+    {
+        // Case-insensitive like the HTTP router names in ApplyRoutes.
+        public bool Equals((string Protocol, string Name) x, (string Protocol, string Name) y) =>
+            x.Protocol == y.Protocol && string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Protocol, string Name) obj) =>
+            HashCode.Combine(obj.Protocol, StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Name));
     }
 }

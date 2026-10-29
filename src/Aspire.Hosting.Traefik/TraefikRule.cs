@@ -47,6 +47,13 @@ public sealed class TraefikRule
     /// <param name="host">The host name, for example <c>ReferenceExpression.Create($"api.{domain}")</c>.</param>
     public static TraefikRule Host(ReferenceExpression host) => Matcher(nameof(Host), host);
 
+    // TCP routers have their own matchers. Only HostSNI is needed, for TraefikTcpRouteOptions, so it isn't public: TCP
+    // and HTTP matchers can't be mixed in one rule.
+    // https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/
+    internal static TraefikRule HostSni(ReferenceExpression host) => Matcher("HostSNI", host);
+
+    internal static TraefikRule AnyHostSni() => Matcher("HostSNI", "*");
+
     /// <summary>Matches requests whose host name matches a regular expression.</summary>
     /// <param name="regex">The regular expression, in Go syntax.</param>
     public static TraefikRule HostRegexp(string regex) => Matcher(nameof(HostRegexp), regex);

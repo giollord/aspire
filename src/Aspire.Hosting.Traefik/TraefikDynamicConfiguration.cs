@@ -89,12 +89,78 @@ internal static class TraefikDynamicConfiguration
             var url = await route.Endpoint.GetValueAsync(context, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException($"The endpoint '{route.Endpoint.EndpointName}' of resource '{route.Resource.Name}' has no URL.");
 
-            services[route.RouterName] = new Dictionary<string, object>
+            if (TraefikLoadBalancer.UsesH2c(route.Endpoint))
             {
-                ["loadBalancer"] = new Dictionary<string, object>
+                // The file provider takes the backend scheme from the server URL; `h2c://` is HTTP/2 without TLS.
+                url = $"h2c{url["http".Length..]}";
+            }
+
+            var loadBalancer = new Dictionary<string, object>
+            {
+                ["servers"] = new[] { new Dictionary<string, object> { ["url"] = url } },
+            };
+
+            foreach (var (key, value) in TraefikLoadBalancer.GetOptions(route))
+            {
+                loadBalancer[key] = value;
+            }
+
+            services[route.RouterName] = new Dictionary<string, object> { ["loadBalancer"] = loadBalancer };
+        }
+
+        var transport = new Dictionary<string, object>();
+        foreach (var protocolRoutes in traefik.TransportRoutes.GroupBy(r => r.Protocol))
+        {
+            var transportRouters = new Dictionary<string, object>();
+            var transportServices = new Dictionary<string, object>();
+
+            foreach (var route in protocolRoutes)
+            {
+                var router = new Dictionary<string, object>
                 {
-                    ["servers"] = new[] { new Dictionary<string, object> { ["url"] = url } },
-                },
+                    ["entryPoints"] = new[] { route.EntryPoint },
+                    ["service"] = route.RouterName,
+                };
+
+                if (route.Tcp is { } tcp)
+                {
+                    router["rule"] = await TraefikRouteRule.Build(tcp).GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty;
+
+                    if (tcp.Priority is int priority)
+                    {
+                        router["priority"] = priority;
+                    }
+
+                    if (tcp.TlsPassthrough)
+                    {
+                        router["tls"] = new Dictionary<string, object> { ["passthrough"] = true };
+                    }
+                    else if (tcp.Tls)
+                    {
+                        // Traefik's default certificate, as for HTTP routes in run mode.
+                        router["tls"] = new Dictionary<string, object>();
+                    }
+                }
+
+                transportRouters[route.RouterName] = router;
+
+                // TCP and UDP servers are addresses, not URLs.
+                var address = await route.Endpoint.Property(EndpointProperty.HostAndPort).GetValueAsync(context, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"The endpoint '{route.Endpoint.EndpointName}' of resource '{route.Resource.Name}' has no address.");
+
+                transportServices[route.RouterName] = new Dictionary<string, object>
+                {
+                    ["loadBalancer"] = new Dictionary<string, object>
+                    {
+                        ["servers"] = new[] { new Dictionary<string, object> { ["address"] = address } },
+                    },
+                };
+            }
+
+            transport[protocolRoutes.Key] = new Dictionary<string, object>
+            {
+                ["routers"] = transportRouters,
+                ["services"] = transportServices,
             };
         }
 
@@ -125,7 +191,7 @@ internal static class TraefikDynamicConfiguration
             };
         }
 
-        return Serialize(routers, services, middlewares);
+        return Serialize(routers, services, middlewares, transport);
     }
 
     /// <summary>
@@ -205,7 +271,7 @@ internal static class TraefikDynamicConfiguration
             middlewares[middleware.Name] = new Dictionary<string, object> { [middleware.Type] = options };
         }
 
-        return Serialize(routers, services: [], middlewares);
+        return Serialize(routers, services: [], middlewares, transport: []);
     }
 
     /// <summary>
@@ -241,7 +307,7 @@ internal static class TraefikDynamicConfiguration
         return router;
     }
 
-    private static string Serialize(Dictionary<string, object> routers, Dictionary<string, object> services, Dictionary<string, object> middlewares)
+    private static string Serialize(Dictionary<string, object> routers, Dictionary<string, object> services, Dictionary<string, object> middlewares, Dictionary<string, object> transport)
     {
         var http = new Dictionary<string, object>();
         if (routers.Count > 0)
@@ -263,6 +329,12 @@ internal static class TraefikDynamicConfiguration
         if (http.Count > 0)
         {
             document["http"] = http;
+        }
+
+        // The `tcp` and `udp` sections, which have the same shape as `http` without middlewares.
+        foreach (var (protocol, section) in transport)
+        {
+            document[protocol] = section;
         }
 
         var serializer = new SerializerBuilder()

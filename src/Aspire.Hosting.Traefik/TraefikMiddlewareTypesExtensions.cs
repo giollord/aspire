@@ -237,6 +237,29 @@ public static class TraefikMiddlewareTypesExtensions
         builder.AddMiddleware(name, "compress");
 
     /// <summary>
+    /// Adds a <c>grpcWeb</c> middleware, which converts gRPC-Web requests from browsers into gRPC requests, so a
+    /// browser can call a gRPC service without a gRPC-Web aware backend.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="name">The name of the middleware.</param>
+    /// <param name="allowOrigins">The origins allowed to call the service from a browser, for example <c>https://app.example.com</c>, or <c>*</c> for any.</param>
+    /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// The backend gets HTTP/2. For an endpoint whose transport is <c>http2</c>, such as a .NET gRPC service with
+    /// HTTP/2-only Kestrel endpoints, Traefik already talks h2c to it. See
+    /// <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/grpcweb/"/>.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikMiddlewareResource> AddGrpcWeb(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params string[] allowOrigins)
+    {
+        ArgumentNullException.ThrowIfNull(allowOrigins);
+
+        var middleware = builder.AddMiddleware(name, "grpcWeb");
+
+        return allowOrigins.Length > 0 ? middleware.WithOption("allowOrigins", allowOrigins) : middleware;
+    }
+
+    /// <summary>
     /// Adds a <c>retry</c> middleware, which resends a request to the backend when the connection fails.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>

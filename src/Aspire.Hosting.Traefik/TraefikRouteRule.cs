@@ -71,6 +71,17 @@ internal static class TraefikRouteRule
         return builder.Build();
     }
 
+    /// <summary>
+    /// Builds the rule of a TCP route: <c>HostSNI(`amqp.example.com`)</c>, or <c>HostSNI(`*`)</c> for every connection.
+    /// </summary>
+    /// <remarks>See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/"/>.</remarks>
+    public static ReferenceExpression Build(TraefikTcpRouteOptions options)
+    {
+        var builder = new ReferenceExpressionBuilder();
+        (options.HostSni is { } host ? TraefikRule.HostSni(host) : TraefikRule.AnyHostSni()).WriteTo(builder);
+        return builder.Build();
+    }
+
     private static bool HasMatchers(TraefikRouteOptions options) =>
         options.Host is not null || options.Path is not null || options.PathPrefix is not null || options.Methods.Count > 0 ||
         options.Headers.Count > 0 || options.Query.Count > 0 || options.ClientIps.Count > 0 || options.Rule is not null;

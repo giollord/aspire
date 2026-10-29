@@ -91,13 +91,81 @@ internal static class TraefikDockerLabels
 
         // Pin the backend port. Traefik only infers it when the container exposes exactly one port, which isn't
         // true for services with several endpoints.
-        labels[$"{loadBalancer}.server.port"] = GetTargetPort(service, route);
+        labels[$"{loadBalancer}.server.port"] = GetTargetPort(service, GetTargetPortVariableName(route), route.Endpoint, route.RouterName);
 
         if (string.Equals(route.Endpoint.EndpointAnnotation.UriScheme, "https", StringComparison.OrdinalIgnoreCase))
         {
             labels[$"{loadBalancer}.server.scheme"] = "https";
         }
+        else if (TraefikLoadBalancer.UsesH2c(route.Endpoint))
+        {
+            labels[$"{loadBalancer}.server.scheme"] = "h2c";
+        }
 
+        TraefikLoadBalancer.AddLabels(labels, loadBalancer, TraefikLoadBalancer.GetOptions(route));
+
+        JoinNetwork(service, defaults);
+    }
+
+    /// <summary>
+    /// Writes the labels of a TCP or UDP route, for example:
+    /// <code>
+    /// traefik.tcp.routers.messaging.rule: HostSNI(`amqp.${DOMAIN}`)
+    /// traefik.tcp.routers.messaging.entrypoints: amqps
+    /// traefik.tcp.routers.messaging.service: messaging
+    /// traefik.tcp.routers.messaging.tls: "true"
+    /// traefik.tcp.routers.messaging.tls.certresolver: letsencrypt
+    /// traefik.tcp.services.messaging.loadbalancer.server.port: "5672"
+    /// </code>
+    /// A UDP router has no rule and no TLS. See
+    /// <see href="https://doc.traefik.io/traefik/reference/routing-configuration/other-providers/docker/#tcp-routers"/>.
+    /// </summary>
+    public static void Apply(DockerComposeServiceResource composeService, Service service, TraefikTransportRoute route, TraefikRouteDefaults defaults)
+    {
+        var labels = service.Labels;
+        var router = $"traefik.{route.Protocol}.routers.{route.RouterName}";
+
+        labels["traefik.enable"] = "true";
+
+        if (route.Tcp is { } tcp)
+        {
+            labels[$"{router}.rule"] = ToComposeExpression(composeService, TraefikRouteRule.Build(tcp));
+
+            if (tcp.Priority is int priority)
+            {
+                labels[$"{router}.priority"] = priority.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (tcp.TlsPassthrough)
+            {
+                labels[$"{router}.tls"] = "true";
+                labels[$"{router}.tls.passthrough"] = "true";
+            }
+            else if (tcp.Tls)
+            {
+                labels[$"{router}.tls"] = "true";
+
+                if (tcp.CertResolver is { } certResolver)
+                {
+                    labels[$"{router}.tls.certresolver"] = certResolver;
+                }
+                else if (defaults.CertResolver is { } defaultResolver)
+                {
+                    labels[$"{router}.tls.certresolver"] = ToComposeExpression(composeService, defaultResolver);
+                }
+            }
+        }
+
+        labels[$"{router}.entrypoints"] = route.EntryPoint;
+        labels[$"{router}.service"] = route.RouterName;
+        labels[$"traefik.{route.Protocol}.services.{route.RouterName}.loadbalancer.server.port"] =
+            GetTargetPort(service, GetTargetPortVariableName(route), route.Endpoint, route.RouterName);
+
+        JoinNetwork(service, defaults);
+    }
+
+    private static void JoinNetwork(Service service, TraefikRouteDefaults defaults)
+    {
         if (defaults.Network is { } network)
         {
             // The external Traefik reaches the service over the shared network. A service on several networks
@@ -107,7 +175,7 @@ internal static class TraefikDockerLabels
                 service.Networks.Add(network);
             }
 
-            labels["traefik.docker.network"] = network;
+            service.Labels["traefik.docker.network"] = network;
         }
     }
 
@@ -118,6 +186,10 @@ internal static class TraefikDockerLabels
     internal static string GetTargetPortVariableName(TraefikRoute route) =>
         $"ASPIRE_TRAEFIK_TARGET_PORT_{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
+    // TCP and UDP routers have their own namespaces, so their names can repeat an HTTP router's.
+    internal static string GetTargetPortVariableName(TraefikTransportRoute route) =>
+        $"ASPIRE_TRAEFIK_TARGET_PORT_{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}";
+
     /// <summary>
     /// Adds an environment variable to the routed resource whose value is the target port of the route's endpoint.
     /// </summary>
@@ -125,15 +197,14 @@ internal static class TraefikDockerLabels
     /// The container port of a service is decided by the Docker Compose publisher: a fixed target port, a port it
     /// allocates for containers without one (for example <c>8000</c>), or a <c>${API_PORT}</c> placeholder for .NET
     /// projects. That mapping isn't public, but the publisher resolves endpoint references in environment variables
-    /// with it. So the port goes through an environment variable, which <see cref="Apply"/> reads back into the label
+    /// with it. So the port goes through an environment variable, which <see cref="Apply(DockerComposeServiceResource, Service, TraefikRoute, TraefikRouteDefaults)"/> reads back into the label
     /// and then removes from the service.
     /// </remarks>
-    internal static void AddTargetPortProbe(IResourceWithEnvironment resource, TraefikRoute route)
+    internal static void AddTargetPortProbe(IResourceWithEnvironment resource, string variableName, EndpointReference endpoint)
     {
-        var name = GetTargetPortVariableName(route);
         resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
         {
-            context.EnvironmentVariables[name] = route.Endpoint.Property(EndpointProperty.TargetPort);
+            context.EnvironmentVariables[variableName] = endpoint.Property(EndpointProperty.TargetPort);
         }));
     }
 
@@ -151,7 +222,7 @@ internal static class TraefikDockerLabels
     /// </summary>
     /// <remarks>
     /// As with <see cref="AddTargetPortProbe"/>, the Docker Compose publisher's mapping from an endpoint to a service
-    /// address isn't public, but it resolves endpoint references in environment variables. <see cref="Apply"/> reads the
+    /// address isn't public, but it resolves endpoint references in environment variables. <see cref="Apply(DockerComposeServiceResource, Service, TraefikRoute, TraefikRouteDefaults)"/> reads the
     /// values back into the labels, and <see cref="RemoveProbes"/> removes the variables afterwards.
     /// </remarks>
     internal static void AddMiddlewareValueProbes(IResourceWithEnvironment resource, IEnumerable<TraefikMiddlewareResource> middlewares)
@@ -190,19 +261,19 @@ internal static class TraefikDockerLabels
             // Options hold the expression objects themselves, so they are matched by reference.
             .ToDictionary(p => p.expression, p => p.variable, (IEqualityComparer<ReferenceExpression>)ReferenceEqualityComparer.Instance);
 
-    private static string GetTargetPort(Service service, TraefikRoute route)
+    private static string GetTargetPort(Service service, string variableName, EndpointReference endpoint, string routerName)
     {
-        if (service.Environment.Remove(GetTargetPortVariableName(route), out var port) && !string.IsNullOrEmpty(port))
+        if (service.Environment.Remove(variableName, out var port) && !string.IsNullOrEmpty(port))
         {
             return port;
         }
 
-        if (route.Endpoint.EndpointAnnotation.TargetPort is int targetPort)
+        if (endpoint.EndpointAnnotation.TargetPort is int targetPort)
         {
             return targetPort.ToString(CultureInfo.InvariantCulture);
         }
 
-        throw new InvalidOperationException($"The container port of endpoint '{route.Endpoint.EndpointName}' on resource '{route.Resource.Name}' can't be determined for the Traefik route '{route.RouterName}'.");
+        throw new InvalidOperationException($"The container port of endpoint '{endpoint.EndpointName}' on resource '{endpoint.Resource.Name}' can't be determined for the Traefik route '{routerName}'.");
     }
 
     /// <summary>

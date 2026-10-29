@@ -125,7 +125,9 @@ internal static class TraefikStaticConfiguration
 
         foreach (var entryPoint in traefik.CustomEntryPoints)
         {
-            args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}"));
+            // A UDP entry point is written `:5353/udp`; without a suffix it listens for TCP.
+            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#address
+            args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}{(entryPoint.IsUdp ? "/udp" : "")}"));
         }
 
         if (traefik.HasWebSecureEntryPoint)

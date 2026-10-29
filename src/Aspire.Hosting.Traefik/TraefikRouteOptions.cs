@@ -128,6 +128,38 @@ public sealed class TraefikRouteOptions
     public string? EntryPoint { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the backend receives the <c>Host</c> header the client sent. When
+    /// <see langword="null"/>, Traefik's default (<see langword="true"/>) applies; <see langword="false"/> sends the
+    /// backend's own address instead, for a backend that only answers on its own name.
+    /// </summary>
+    public bool? PassHostHeader { get; set; }
+
+    /// <summary>
+    /// Gets or sets the sticky session options, which keep a client on the same replica. When <see langword="null"/>,
+    /// requests are spread across replicas.
+    /// </summary>
+    public TraefikStickySessionOptions? StickySession { get; set; }
+
+    /// <summary>
+    /// Gets or sets the active health check Traefik runs against the backend.
+    /// </summary>
+    /// <remarks>
+    /// When <see langword="null"/> and <see cref="UseResourceProbe"/> is set, the health check is taken from an HTTP
+    /// readiness or liveness probe of the routed endpoint, added with <c>WithHttpProbe</c>.
+    /// </remarks>
+    public TraefikHealthCheckOptions? HealthCheck { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an HTTP probe of the routed endpoint (<c>WithHttpProbe</c>) becomes
+    /// Traefik's health check when <see cref="HealthCheck"/> isn't set. Defaults to <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// A readiness probe is preferred over a liveness probe, because it says whether the resource can take requests.
+    /// Startup probes and probes of other endpoints aren't used.
+    /// </remarks>
+    public bool UseResourceProbe { get; set; } = true;
+
+    /// <summary>
     /// Gets the middlewares of this route, in the order Traefik runs them. They run after the middlewares added to
     /// the whole resource with <c>WithTraefikMiddleware</c>.
     /// </summary>

@@ -159,6 +159,12 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal List<TraefikRoute> Routes { get; } = [];
 
     /// <summary>
+    /// Gets the TCP and UDP routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/>, like
+    /// <see cref="Routes"/>.
+    /// </summary>
+    internal List<TraefikTransportRoute> TransportRoutes { get; } = [];
+
+    /// <summary>
     /// Gets a value indicating whether the <c>websecure</c> entry point exists on the managed container.
     /// </summary>
     internal bool HasWebSecureEntryPoint => AcmeResolvers.Count > 0;

@@ -75,6 +75,53 @@ api.WithTraefikRoute(traefik, route =>
 
 Values are quoted and nested combinations get parentheses. `RawRule` takes a whole rule in Traefik's syntax instead, and can't be combined with the other options. See [rules and priority](https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/).
 
+### Load balancing and health checks
+
+A route's options also configure the Traefik service behind it:
+
+```csharp
+api.WithHttpProbe(ProbeType.Readiness, "/health")   // also Traefik's health check
+   .WithTraefikRoute(traefik, route =>
+   {
+       route.Host = ReferenceExpression.Create($"api.{domain}");
+       route.StickySession = new TraefikStickySessionOptions { CookieName = "affinity", Secure = true };
+       route.PassHostHeader = false;
+   });
+```
+
+- **Health checks**: an HTTP readiness probe (or else a liveness probe) of the routed endpoint, added with `WithHttpProbe`, becomes Traefik's active health check, with the probe's period and timeout. Traefik stops sending requests to a server while its check fails. Set `route.HealthCheck` for a check of its own, or `route.UseResourceProbe = false` to have none.
+- **Sticky sessions**: `route.StickySession` keeps a client on one replica with a cookie.
+- **HTTP/2 without TLS (h2c)**: an `http` endpoint whose transport is `http2`, such as a gRPC service with HTTP/2-only Kestrel endpoints, is called with h2c. For browsers, `AddGrpcWeb` adds a middleware that converts gRPC-Web into gRPC.
+- **`PassHostHeader`**: `false` sends the backend's own address as the `Host` header instead of the client's.
+
+See [load balancing](https://doc.traefik.io/traefik/reference/routing-configuration/http/load-balancing/service/).
+
+### TCP and UDP routes
+
+Protocols other than HTTP go through entry points of their own:
+
+```csharp
+var traefik = builder.AddTraefik("traefik")
+    .WithEntryPoint("postgres", targetPort: 5432)
+    .WithEntryPoint("dns", targetPort: 53, scheme: "udp");
+
+postgres.WithTraefikTcpRoute(traefik, "postgres");   // every connection on the entry point
+dns.WithTraefikUdpRoute(traefik, "dns");             // every datagram on the entry point
+```
+
+Plain TCP carries no host name, so such a route takes the whole entry point. Over TLS, Traefik reads the server name (SNI), so TCP routes can share an entry point, also with HTTPS routes. Traefik either terminates TLS, with the same certificates as HTTP routes, or passes the encrypted connection through:
+
+```csharp
+rabbit.WithTraefikTcpRoute(traefik, route =>
+{
+    route.EntryPoint = "websecure";
+    route.HostSni = ReferenceExpression.Create($"amqp.{domain}");
+    route.Tls = true;   // or route.TlsPassthrough = true
+});
+```
+
+The routed endpoint must use the same protocol as the route: a UDP route needs an endpoint created with `protocol: ProtocolType.Udp`. A UDP entry point isn't proxied by Aspire in run mode, so its host port goes straight to Traefik. See [TCP routers](https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/router/) and [UDP routers](https://doc.traefik.io/traefik/reference/routing-configuration/udp/routing/router/).
+
 ## Middlewares
 
 Traefik middlewares change requests or responses on a route, for example by adding headers or rewriting the path. The common ones have their own methods:

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -73,9 +74,24 @@ traefik.WithEntryPointMiddleware(enableHttps ? "websecure" : "web",
 // basic authentication.
 builder.AddContainer("whoami", "traefik/whoami", "v1.11")
     .WithHttpEndpoint(targetPort: 80)
+    // Traefik takes its health check from the readiness probe, and stops routing to whoami while it fails.
+    .WithHttpProbe(ProbeType.Readiness, "/health")
     .WithTraefikRoute(traefik, ReferenceExpression.Create($"whoami.{domain}"))
     .WithTraefikRoute(traefik, ReferenceExpression.Create($"admin.{domain}"), adminAuth)
     .WithTraefikMiddleware(defaults);
+
+// TCP and UDP: Traefik's echo servers on their own entry points, for protocols other than HTTP.
+traefik
+    .WithEntryPoint("echo-tcp", targetPort: 9000, port: builder.Configuration.GetValue<int?>("Traefik:EchoTcpPort"))
+    .WithEntryPoint("echo-udp", targetPort: 9001, port: builder.Configuration.GetValue<int?>("Traefik:EchoUdpPort"), scheme: "udp");
+
+builder.AddContainer("echo-tcp", "traefik/whoamitcp", "v0.3.0")
+    .WithEndpoint(targetPort: 8080, name: "tcp")
+    .WithTraefikTcpRoute(traefik, "echo-tcp");
+
+builder.AddContainer("echo-udp", "traefik/whoamiudp", "v0.2.3")
+    .WithEndpoint(targetPort: 8080, name: "udp", protocol: ProtocolType.Udp)
+    .WithTraefikUdpRoute(traefik, "echo-udp");
 
 // Single sign-on: Keycloak behind Traefik at auth.<domain>, and secure.<domain> only for users signed in to its realm.
 // AddKeycloakForwardAuth runs oauth2-proxy between them and sets Keycloak's hostname to its public URL.

@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
@@ -83,6 +85,8 @@ public static partial class TraefikBuilderExtensions
             // proxy can do with the socket, but access to it is still powerful; see the README for alternatives.
             traefik.WithBindMount(DockerSocketPath, DockerSocketPath, isReadOnly: true);
 
+            traefik.WithAnnotation(new DockerComposeServiceCustomizationAnnotation((_, service) => SetUdpPortProtocols(resource, service)));
+
             // DNS provider credentials of DNS-01 resolvers. Only at publish time, because run mode doesn't request
             // certificates, so `aspire run` doesn't ask for the secrets. lego reads them from the environment.
             // https://go-acme.github.io/lego/dns/
@@ -149,6 +153,13 @@ public static partial class TraefikBuilderExtensions
                         context.EnvironmentVariables[$"ASPIRE_TRAEFIK_BACKEND_{TraefikNames.ToEnvironmentName(route.RouterName)}"] = route.Endpoint;
                     }
 
+                    // TCP and UDP routers have their own namespaces, so their names can repeat an HTTP router's.
+                    foreach (var route in resource.TransportRoutes)
+                    {
+                        context.EnvironmentVariables[$"ASPIRE_TRAEFIK_BACKEND_{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}"] =
+                            route.Endpoint.Property(EndpointProperty.HostAndPort);
+                    }
+
                     // The same applies to middleware options that point at another resource, such as a forward
                     // authentication address.
                     foreach (var middleware in resource.Middlewares)
@@ -171,6 +182,45 @@ public static partial class TraefikBuilderExtensions
         }
 
         return traefik;
+    }
+
+    /// <summary>
+    /// Marks the port mappings of UDP entry points as UDP in the Docker Compose service of Traefik.
+    /// </summary>
+    /// <remarks>
+    /// The Docker Compose publisher writes every mapping without a protocol, such as <c>5353:5353</c>, which Docker reads
+    /// as TCP, so a UDP entry point would never receive a datagram. The UDP form is <c>5353:5353/udp</c>.
+    /// See <see href="https://docs.docker.com/reference/compose-file/services/#ports"/>.
+    /// </remarks>
+    private static void SetUdpPortProtocols(TraefikResource traefik, Service service)
+    {
+        foreach (var entryPoint in traefik.CustomEntryPoints.Where(e => e.IsUdp))
+        {
+            var target = entryPoint.TargetPort.ToString(CultureInfo.InvariantCulture);
+
+            // The publisher writes one string for equal mappings, so a TCP entry point on the same container port shares
+            // it. Such a mapping is kept for TCP and the UDP one is added next to it.
+            var sharedWithTcp = entryPoint.TargetPort is TraefikResource.WebTargetPort or TraefikResource.WebSecureTargetPort or TraefikResource.TraefikTargetPort
+                || traefik.CustomEntryPoints.Any(e => !e.IsUdp && e.TargetPort == entryPoint.TargetPort);
+
+            for (var i = 0; i < service.Ports.Count; i++)
+            {
+                var mapping = service.Ports[i];
+                if (mapping != target && !mapping.EndsWith($":{target}", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (sharedWithTcp)
+                {
+                    service.Ports.Insert(++i, $"{mapping}/udp");
+                }
+                else
+                {
+                    service.Ports[i] = $"{mapping}/udp";
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -220,16 +270,22 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
-    /// Adds a custom entry point (a port Traefik listens on), for example for TCP routes.
+    /// Adds a custom entry point (a port Traefik listens on), for example for TCP or UDP routes.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="name">The name of the entry point. The resource gets an endpoint with the same name.</param>
     /// <param name="targetPort">The port Traefik listens on inside the container.</param>
     /// <param name="port">The host port. When <see langword="null"/>, a random port is used in run mode and <paramref name="targetPort"/> at publish time.</param>
-    /// <param name="scheme">The scheme of the endpoint: <c>tcp</c>, <c>http</c>, or <c>https</c>.</param>
+    /// <param name="scheme">The scheme of the endpoint: <c>tcp</c>, <c>http</c>, <c>https</c>, or <c>udp</c> for an entry point that receives UDP datagrams.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <remarks>
+    /// <para>
+    /// A <c>udp</c> entry point only takes UDP routes (<c>WithTraefikUdpRoute</c>). In run mode its endpoint isn't
+    /// proxied by Aspire, which proxies TCP only, so the host port goes straight to Traefik.
+    /// </para>
+    /// <para>
     /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/"/>.
+    /// </para>
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<TraefikResource> WithEntryPoint(this IResourceBuilder<TraefikResource> builder, string name, int targetPort, int? port = null, string scheme = "tcp")
@@ -248,19 +304,22 @@ public static partial class TraefikBuilderExtensions
             throw new ArgumentException($"The entry point name '{name}' is invalid. Use letters, digits, '-' and '_' only.", nameof(name));
         }
 
-        if (scheme is not ("tcp" or "http" or "https"))
+        if (scheme is not ("tcp" or "http" or "https" or "udp"))
         {
-            throw new ArgumentException($"The scheme '{scheme}' is not supported. Use 'tcp', 'http', or 'https'.", nameof(scheme));
+            throw new ArgumentException($"The scheme '{scheme}' is not supported. Use 'tcp', 'http', 'https', or 'udp'.", nameof(scheme));
         }
 
-        builder.Resource.CustomEntryPoints.Add(new TraefikEntryPoint(name, targetPort));
+        var isUdp = scheme == "udp";
+        builder.Resource.CustomEntryPoints.Add(new TraefikEntryPoint(name, targetPort, isUdp));
 
         return builder.WithEndpoint(
             port: port ?? (builder.ApplicationBuilder.ExecutionContext.IsPublishMode ? targetPort : null),
             targetPort: targetPort,
             scheme: scheme,
             name: name,
-            isExternal: true);
+            isExternal: true,
+            isProxied: isUdp ? false : null,
+            protocol: isUdp ? ProtocolType.Udp : null);
     }
 
     /// <summary>
