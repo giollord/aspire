@@ -42,6 +42,15 @@ var adminAuth = builder.ExecutionContext.IsPublishMode
     ? traefik.AddBasicAuth("admin-auth", builder.AddParameter("admin-htpasswd", secret: true))
     : traefik.AddBasicAuth("admin-auth", "admin", builder.AddParameter("admin-password", secret: true));
 
+// The dashboard on traefik.<domain>, behind the same basic authentication. In run mode it is also served without
+// authentication on the traefik endpoint.
+traefik.WithDashboard(ReferenceExpression.Create($"traefik.{domain}"), adminAuth);
+
+// An entry-point middleware applies to every router on the entry point, including the dashboard and sign-in routes.
+var enableHttps = builder.Configuration.GetValue<bool>("Traefik:EnableHttps");
+traefik.WithEntryPointMiddleware(enableHttps ? "websecure" : "web",
+    traefik.AddHeaders("served-by", headers => headers.CustomResponseHeaders["X-Served-By"] = "aspire-traefik"));
+
 // A container backend, reached by its name on the container network. admin.<domain> is the same backend behind
 // basic authentication.
 builder.AddContainer("whoami", "traefik/whoami", "v1.11")

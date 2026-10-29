@@ -26,7 +26,7 @@ public static class TraefikBuilderExtensions
     /// <para>
     /// The resource has a <c>web</c> entry point for HTTP traffic (container port 80, on a random host port in run
     /// mode and on port 80 at publish time) and a <c>traefik</c> entry point (container port 8080) for the ping
-    /// health check and, with <see cref="WithDashboard"/>, the dashboard.
+    /// health check and, with <see cref="WithDashboard(IResourceBuilder{TraefikResource})"/>, the dashboard.
     /// </para>
     /// <para>
     /// Route traffic to other resources with <c>WithTraefikRoute</c> on those resources. In run mode the routes are
@@ -93,6 +93,20 @@ public static class TraefikBuilderExtensions
                     // dashboard enabled, which it already is.
                     builder.CreateResourceBuilder(environment)
                         .WithDashboard(dashboard => resource.PublishOtlpEndpoint = dashboard.Resource.OtlpGrpcEndpoint);
+                }
+
+                // Traefik's own dynamic configuration (entry-point middlewares, the dashboard router) is generated with
+                // its compose service (see TraefikRoutingSubscriber), but configs are top-level entries of the compose
+                // file, which only the environment's ConfigureComposeFile can add.
+                foreach (var composeEnvironment in @event.Model.Resources.OfType<DockerComposeEnvironmentResource>())
+                {
+                    builder.CreateResourceBuilder(composeEnvironment).ConfigureComposeFile(file =>
+                    {
+                        if (resource.PublishFileConfiguration is { } configuration && configuration.Environment == composeEnvironment)
+                        {
+                            file.AddConfig(new Config { Name = configuration.Name, Content = configuration.Content });
+                        }
+                    });
                 }
 
                 return Task.CompletedTask;
@@ -237,7 +251,8 @@ public static class TraefikBuilderExtensions
     /// <remarks>
     /// In run mode the dashboard is served without authentication on the <c>traefik</c> endpoint, and the resource
     /// shows a link to it. At publish time the dashboard is enabled but not exposed, because an unauthenticated
-    /// dashboard must not be reachable from the internet.
+    /// dashboard must not be reachable from the internet. To expose it behind authentication, use the overload that
+    /// takes a host and middlewares.
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<TraefikResource> WithDashboard(this IResourceBuilder<TraefikResource> builder)
@@ -251,6 +266,202 @@ public static class TraefikBuilderExtensions
             url.Url = $"{url.Url.TrimEnd('/')}/dashboard/";
             url.DisplayText = "Dashboard";
         });
+    }
+
+    /// <summary>
+    /// Enables the Traefik dashboard and routes it on a host, behind middlewares such as authentication.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="host">The host the dashboard is served on, for example <c>traefik.example.com</c>.</param>
+    /// <param name="middlewares">The middlewares that protect the dashboard, in the order Traefik runs them. At least one is required.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The dashboard router uses the default entry point of the routes, with TLS when <c>WithLetsEncrypt</c> is used, and
+    /// is served at <c>/dashboard/</c> on the host. It is written to Traefik's own dynamic configuration in both modes,
+    /// so it is published as a Docker Compose config of the Traefik service. In run mode the unauthenticated dashboard
+    /// on the <c>traefik</c> endpoint stays available too.
+    /// </para>
+    /// <para>
+    /// The middlewares must belong to this Traefik. Single sign-on with <c>AddOAuth2ProxyForwardAuth</c> works: the host
+    /// gets a sign-in route like any protected route. With <c>PublishAsExternal</c>, the dashboard of the external Traefik
+    /// is its own, so nothing is published for it.
+    /// </para>
+    /// <para>
+    /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/api-dashboard/"/>.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// var htpasswd = builder.AddParameter("dashboard-htpasswd", secret: true);
+    ///
+    /// var traefik = builder.AddTraefik("traefik")
+    ///     .WithLetsEncrypt("admin@example.com");
+    ///
+    /// var auth = traefik.AddBasicAuth("dashboard-auth", htpasswd);
+    /// traefik.WithDashboard("traefik.example.com", auth);
+    /// </code>
+    /// </example>
+    [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withDashboardRoute export, which accepts a string or a reference expression.")]
+    public static IResourceBuilder<TraefikResource> WithDashboard(this IResourceBuilder<TraefikResource> builder, string host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        return builder.WithDashboard(ReferenceExpression.Create($"{host}"), middlewares);
+    }
+
+    /// <summary>
+    /// Enables the Traefik dashboard and routes it on a host that can reference parameters, behind middlewares such as
+    /// authentication.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="host">The host the dashboard is served on, for example <c>traefik.{domain}</c>.</param>
+    /// <param name="middlewares">The middlewares that protect the dashboard, in the order Traefik runs them. At least one is required.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// See <see cref="WithDashboard(IResourceBuilder{TraefikResource}, string, IResourceBuilder{TraefikMiddlewareResource}[])"/>.
+    /// </remarks>
+    [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withDashboardRoute export, which accepts a string or a reference expression.")]
+    public static IResourceBuilder<TraefikResource> WithDashboard(this IResourceBuilder<TraefikResource> builder, ReferenceExpression host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(middlewares);
+
+        if (middlewares.Length == 0)
+        {
+            // A dashboard on a public host without authentication exposes the whole routing configuration.
+            throw new ArgumentException("A routed dashboard needs at least one middleware, such as authentication.", nameof(middlewares));
+        }
+
+        var resources = GetOwnMiddlewares(builder, middlewares, nameof(middlewares));
+        var isFirstCall = builder.Resource.DashboardHost is null;
+
+        builder.Resource.DashboardHost = host;
+        builder.Resource.DashboardMiddlewares.Clear();
+        builder.Resource.DashboardMiddlewares.AddRange(resources);
+        builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
+        builder.WithDashboard();
+
+        if (isFirstCall && !builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
+        {
+            var resource = builder.Resource;
+            builder.WithUrls(async context =>
+            {
+                if (resource.DashboardHost is not { } dashboardHost)
+                {
+                    return;
+                }
+
+                var url = TraefikUrls.Build(resource, new TraefikRouteOptions { Host = dashboardHost, PathPrefix = "/dashboard/" }, isPublishMode: false);
+                if (await url.GetValueAsync(context.CancellationToken).ConfigureAwait(false) is { Length: > 0 } value)
+                {
+                    context.Urls.Add(new ResourceUrlAnnotation { Url = value, DisplayText = "Dashboard (routed)" });
+                }
+            });
+        }
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Enables the Traefik dashboard and routes it on a host, behind middlewares such as authentication.
+    /// </summary>
+    [AspireExport("withDashboardRoute")]
+    internal static IResourceBuilder<TraefikResource> WithDashboardPolyglot(
+        this IResourceBuilder<TraefikResource> builder,
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object host,
+        IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
+    {
+        return host switch
+        {
+            string text => builder.WithDashboard(text, middlewares),
+            ReferenceExpression expression => builder.WithDashboard(expression, middlewares),
+            _ => throw new ArgumentException($"Unsupported type '{host?.GetType().Name}'. Expected a string or a reference expression.", nameof(host)),
+        };
+    }
+
+    /// <summary>
+    /// Applies middlewares to every router on an entry point, including routers that don't come from Aspire routes.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="entryPoint">The entry point, for example <c>websecure</c>, or one added with <see cref="WithEntryPoint"/>.</param>
+    /// <param name="middlewares">The middlewares, in the order Traefik runs them.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// Entry-point middlewares run before the middlewares of a route, which suits defaults for the whole proxy, such as
+    /// security headers or a rate limit. Calling the method again for the same entry point appends to its middlewares.
+    /// </para>
+    /// <para>
+    /// Traefik reads entry-point middlewares from its static configuration, so they are defined in Traefik's own file
+    /// provider in both modes; at publish time that file is a Docker Compose config of the Traefik service. That isn't
+    /// possible for a Traefik used with <c>PublishAsExternal</c>, which throws at publish time: configure the middlewares
+    /// on the external Traefik instead.
+    /// </para>
+    /// <para>
+    /// oauth2-proxy middlewares can't be used, because they would also intercept the sign-in callback. The <c>traefik</c>
+    /// entry point can't be used either, because it serves the health check.
+    /// </para>
+    /// <para>
+    /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-middlewares"/>.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// var traefik = builder.AddTraefik("traefik")
+    ///     .WithLetsEncrypt("admin@example.com");
+    ///
+    /// traefik.WithEntryPointMiddleware("websecure", traefik.AddSecurityHeaders("security-headers"));
+    /// </code>
+    /// </example>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithEntryPointMiddleware(this IResourceBuilder<TraefikResource> builder, string entryPoint, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
+        ArgumentNullException.ThrowIfNull(middlewares);
+
+        if (entryPoint == TraefikResource.TraefikEntryPointName)
+        {
+            throw new ArgumentException($"The '{TraefikResource.TraefikEntryPointName}' entry point serves the health check and the run-mode dashboard, so it can't have middlewares.", nameof(entryPoint));
+        }
+
+        var resources = GetOwnMiddlewares(builder, middlewares, nameof(middlewares));
+
+        if (resources.SelectMany(m => m.WithReferences()).FirstOrDefault(m => m.OAuth2Proxy is not null) is { } signIn)
+        {
+            throw new ArgumentException($"The oauth2-proxy middleware '{signIn.Name}' can't be an entry-point middleware, because it would also intercept the sign-in callback. Apply it to the routes with WithTraefikMiddleware.", nameof(middlewares));
+        }
+
+        if (!builder.Resource.EntryPointMiddlewares.TryGetValue(entryPoint, out var list))
+        {
+            list = [];
+            builder.Resource.EntryPointMiddlewares[entryPoint] = list;
+        }
+
+        list.AddRange(resources.Where(m => !list.Contains(m)));
+        builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
+
+        return builder;
+    }
+
+    private static List<TraefikMiddlewareResource> GetOwnMiddlewares(IResourceBuilder<TraefikResource> builder, IResourceBuilder<TraefikMiddlewareResource>[] middlewares, string parameterName)
+    {
+        var resources = new List<TraefikMiddlewareResource>(middlewares.Length);
+        foreach (var middleware in middlewares)
+        {
+            ArgumentNullException.ThrowIfNull(middleware, parameterName);
+
+            if (middleware.Resource.Parent != builder.Resource)
+            {
+                throw new ArgumentException($"The Traefik middleware '{middleware.Resource.Name}' belongs to '{middleware.Resource.Parent.Name}', not '{builder.Resource.Name}'.", parameterName);
+            }
+
+            resources.Add(middleware.Resource);
+        }
+
+        return resources;
     }
 
     /// <summary>

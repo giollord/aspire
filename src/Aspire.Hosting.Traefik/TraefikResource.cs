@@ -92,6 +92,39 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal List<TraefikMiddlewareResource> Middlewares { get; } = [];
 
     /// <summary>
+    /// Gets the middlewares that apply to every router on an entry point, by entry point name, added with
+    /// <c>WithEntryPointMiddleware</c>.
+    /// </summary>
+    internal OrderedDictionary<string, List<TraefikMiddlewareResource>> EntryPointMiddlewares { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Gets the host the dashboard is routed on with <c>WithDashboard(host, middlewares)</c>, if any.
+    /// </summary>
+    internal ReferenceExpression? DashboardHost { get; set; }
+
+    /// <summary>
+    /// Gets the middlewares that protect the dashboard router.
+    /// </summary>
+    internal List<TraefikMiddlewareResource> DashboardMiddlewares { get; } = [];
+
+    /// <summary>
+    /// Gets the name of the router that serves the dashboard on <see cref="DashboardHost"/>.
+    /// </summary>
+    internal string DashboardRouterName => $"{Name}-dashboard";
+
+    /// <summary>
+    /// Gets a value indicating whether the managed container reads a dynamic configuration file at publish time. Routes
+    /// are labels then, but entry-point middlewares and the dashboard router belong to Traefik itself.
+    /// </summary>
+    internal bool HasPublishFileConfiguration => PublishExternal is null && (EntryPointMiddlewares.Count > 0 || DashboardHost is not null);
+
+    /// <summary>
+    /// Gets the dynamic configuration written for the managed container at publish time, set while the Docker Compose
+    /// file is generated. See <see cref="TraefikDynamicConfiguration.GeneratePublish"/>.
+    /// </summary>
+    internal TraefikPublishFileConfiguration? PublishFileConfiguration { get; set; }
+
+    /// <summary>
     /// Gets the routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/> before the
     /// application starts or publishes.
     /// </summary>

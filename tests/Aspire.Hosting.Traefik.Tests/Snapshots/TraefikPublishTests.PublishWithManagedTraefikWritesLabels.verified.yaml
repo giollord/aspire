@@ -17,6 +17,7 @@
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.traefik.address=:8080"
+      - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--ping=true"

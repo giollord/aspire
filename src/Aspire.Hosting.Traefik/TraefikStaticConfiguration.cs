@@ -46,7 +46,7 @@ internal static class TraefikStaticConfiguration
         // serves `traefik healthcheck` and external monitoring.
         args.Add("--ping=true");
 
-        AddProviders(args, isPublishMode);
+        AddProviders(args, isPublishMode, traefik.HasPublishFileConfiguration);
 
         if (traefik.DashboardEnabled)
         {
@@ -107,6 +107,19 @@ internal static class TraefikStaticConfiguration
             args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}"));
         }
 
+        if (traefik.HasWebSecureEntryPoint)
+        {
+            // TLS by default for every router on `websecure`, including routers that don't come from Aspire routes,
+            // such as one added by hand to a provider. Aspire's own routes still set TLS on the router as well. As for
+            // the routes, run mode uses the default certificate and publish time the ACME resolver.
+            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
+            args.Add(isPublishMode
+                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={traefik.AcmeResolver!.Name}"
+                : $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls=true");
+        }
+
+        AddEntryPointMiddlewares(traefik, args);
+
         if (traefik.HttpsRedirectEnabled)
         {
             if (!traefik.HasWebSecureEntryPoint)
@@ -126,7 +139,30 @@ internal static class TraefikStaticConfiguration
         }
     }
 
-    private static void AddProviders(IList<object> args, bool isPublishMode)
+    private static void AddEntryPointMiddlewares(TraefikResource traefik, IList<object> args)
+    {
+        foreach (var (entryPoint, middlewares) in traefik.EntryPointMiddlewares)
+        {
+            var exists = entryPoint switch
+            {
+                TraefikResource.WebEntryPointName => true,
+                TraefikResource.WebSecureEntryPointName => traefik.HasWebSecureEntryPoint,
+                _ => traefik.CustomEntryPoints.Any(e => e.Name == entryPoint),
+            };
+
+            if (!exists)
+            {
+                throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has middlewares for the entry point '{entryPoint}', which doesn't exist. Add it with WithEntryPoint, or WithLetsEncrypt for 'websecure'.");
+            }
+
+            // Static configuration references dynamic configuration, so the middlewares need their provider suffix.
+            // They are defined in the file provider in both modes (see TraefikDynamicConfiguration).
+            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-middlewares
+            args.Add($"--entrypoints.{entryPoint}.http.middlewares={string.Join(",", middlewares.Select(m => $"{m.Name}@file"))}");
+        }
+    }
+
+    private static void AddProviders(IList<object> args, bool isPublishMode, bool hasPublishFileConfiguration)
     {
         if (isPublishMode)
         {
@@ -136,10 +172,12 @@ internal static class TraefikStaticConfiguration
             args.Add("--providers.docker=true");
             args.Add("--providers.docker.exposedbydefault=false");
         }
-        else
+
+        if (!isPublishMode || hasPublishFileConfiguration)
         {
             // In run mode the backends include projects and executables on the host, which have no labels, so the
-            // routes are written to a file-provider directory instead (see TraefikDynamicConfiguration).
+            // routes are written to a file-provider directory instead (see TraefikDynamicConfiguration). At publish
+            // time the directory holds Traefik's own configuration, such as entry-point middlewares, when there is any.
             // https://doc.traefik.io/traefik/reference/install-configuration/providers/others/file/
             args.Add($"--providers.file.directory={TraefikResource.DynamicConfigurationDirectory}");
         }

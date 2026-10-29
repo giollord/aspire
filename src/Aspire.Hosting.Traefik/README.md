@@ -187,6 +187,32 @@ api.WithTraefikMiddleware(headers)                                    // every r
 
 See the [middleware reference](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/overview/) for the types and their options.
 
+### Entry-point middlewares
+
+`WithEntryPointMiddleware` applies middlewares to every router on an entry point, including routers that don't come from Aspire routes. They run before the middlewares of the route:
+
+```csharp
+traefik.WithEntryPointMiddleware("websecure", traefik.AddSecurityHeaders("security-headers"));
+```
+
+- Traefik reads them from its static configuration, so they are defined in Traefik's own file provider. At publish time that file is a Docker Compose config of the Traefik service, with `${VAR}` placeholders like the labels.
+- They can't be used with `PublishAsExternal`, which throws at publish time: configure them on the external Traefik instead.
+- oauth2-proxy middlewares can't be used, because they would also intercept the sign-in callback, and neither can the `traefik` entry point, which serves the health check.
+
+## Traefik dashboard
+
+`WithDashboard()` enables the dashboard. In run mode it is served without authentication on the `traefik` endpoint and linked from the resource; at publish time it is enabled but not exposed.
+
+To expose it, route it on a host behind at least one middleware:
+
+```csharp
+var htpasswd = builder.AddParameter("dashboard-htpasswd", secret: true);
+
+traefik.WithDashboard(ReferenceExpression.Create($"traefik.{domain}"), traefik.AddBasicAuth("dashboard-auth", htpasswd));
+```
+
+The dashboard is then served at `/dashboard/` on that host, on the default entry point of the routes and with TLS when `WithLetsEncrypt` is used. Single sign-on middlewares work too: the host gets a sign-in route. With `PublishAsExternal`, nothing is published for the dashboard, because the external Traefik has its own.
+
 ## Public URLs
 
 `GetTraefikUrl()` returns the address a resource is reachable on through Traefik. In run mode the URL includes Traefik's host port, so it is correct even with randomly assigned ports. Use it for OAuth redirect URIs or public base URLs:
@@ -207,7 +233,7 @@ var traefik = builder.AddTraefik("traefik")
                      .WithHttpsRedirect();
 ```
 
-This adds the `websecure` entry point (port 443). At publish time, routes request certificates from Let's Encrypt (TLS-ALPN-01 by default, or HTTP-01), which are stored in a volume. Let's Encrypt can't issue certificates for a local run, because it must reach the machine on public ports 80 and 443 under a public DNS name, so in run mode Traefik serves HTTPS with its self-signed default certificate. Pass `staging: true` while testing a deployment to avoid Let's Encrypt rate limits.
+This adds the `websecure` entry point (port 443), with TLS by default for every router on it. At publish time, routes request certificates from Let's Encrypt (TLS-ALPN-01 by default, or HTTP-01), which are stored in a volume. Let's Encrypt can't issue certificates for a local run, because it must reach the machine on public ports 80 and 443 under a public DNS name, so in run mode Traefik serves HTTPS with its self-signed default certificate. Pass `staging: true` while testing a deployment to avoid Let's Encrypt rate limits.
 
 The email can be a string, a parameter, or an expression such as `ReferenceExpression.Create($"admin@{domain}")`. To choose the ACME directory per deployment, or to use another ACME certificate authority, pass it as a parameter instead of `staging`:
 
@@ -241,7 +267,7 @@ traefik.PublishAsExternal("traefik", ReferenceExpression.Create($"{entryPoint}")
 
 - `WithHostPort` / `WithHostHttpsPort` pin the host ports (random in run mode, 80 and 443 at publish time by default).
 - `WithEntryPoint` adds more entry points, for example for TCP traffic.
-- `WithDashboard` enables the Traefik dashboard. In run mode it is served without authentication and linked from the resource. At publish time it is enabled but not exposed.
+- `WithDashboard` enables the Traefik dashboard; see [Traefik dashboard](#traefik-dashboard).
 - Traefik reads its static configuration from command-line arguments, so `WithArgs("--log.level=DEBUG")` adds any other setting.
 
 ## Security considerations

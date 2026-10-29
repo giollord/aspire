@@ -3,6 +3,7 @@
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
+using Aspire.Hosting.Docker.Resources.ServiceNodes;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Lifecycle;
 
@@ -42,12 +43,25 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             traefik.Routes.Clear();
         }
 
-        AddSignInRoutes(model);
+        AddSignInRoutes(model, isPublishMode);
 
         // Traefik matches router names case-sensitively in the file provider, but Docker label keys are compared
         // case-insensitively by some tooling, so treat names that differ only by case as duplicates.
         var routerNames = new Dictionary<string, IResource>(StringComparer.OrdinalIgnoreCase);
         var publishesToDockerCompose = isPublishMode && model.Resources.OfType<DockerComposeEnvironmentResource>().Any();
+
+        foreach (var traefik in model.Resources.OfType<TraefikResource>())
+        {
+            if (traefik.DashboardHost is not null)
+            {
+                routerNames[traefik.DashboardRouterName] = traefik;
+            }
+
+            if (publishesToDockerCompose)
+            {
+                ApplyPublishFileConfiguration(traefik);
+            }
+        }
 
         foreach (var resource in model.Resources)
         {
@@ -146,6 +160,39 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         SetErrorPageServices(model);
     }
 
+    private static void ApplyPublishFileConfiguration(TraefikResource traefik)
+    {
+        if (traefik.PublishExternal is not null && traefik.EntryPointMiddlewares.Count > 0)
+        {
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' is published as external, so its entry-point middlewares can't be deployed. Configure them on the external Traefik instead.");
+        }
+
+        if (!traefik.HasPublishFileConfiguration)
+        {
+            return;
+        }
+
+        // Endpoint values in the middlewares, such as a forward authentication address, are resolved through
+        // environment variables of Traefik's own service, as they are for routed services (see TraefikDockerLabels).
+        TraefikDockerLabels.AddMiddlewareValueProbes(traefik, TraefikDynamicConfiguration.GetPublishMiddlewares(traefik));
+
+        traefik.Annotations.Add(new DockerComposeServiceCustomizationAnnotation((composeService, service) =>
+        {
+            var content = TraefikDynamicConfiguration.GeneratePublish(traefik, composeService, service);
+            TraefikDockerLabels.RemoveProbes(service);
+
+            // The config itself is added to the compose file by AddTraefik, which can reach the environment's
+            // ConfigureComposeFile; that runs after every service is generated.
+            var name = $"{service.Name}-dynamic";
+            traefik.PublishFileConfiguration = new(composeService.Parent, name, content);
+            service.AddConfig(new ConfigReference
+            {
+                Source = name,
+                Target = $"{TraefikResource.DynamicConfigurationDirectory}/{TraefikDynamicConfiguration.FileName}",
+            });
+        }));
+    }
+
     private static void SetErrorPageServices(DistributedApplicationModel model)
     {
         foreach (var middleware in model.Resources.OfType<TraefikMiddlewareResource>())
@@ -207,7 +254,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
     /// The provider redirects the browser back to <c>/oauth2/callback</c> on the host the user first requested, so that
     /// path must reach oauth2-proxy rather than the protected backend, and without passing through the middleware.
     /// </remarks>
-    private static void AddSignInRoutes(DistributedApplicationModel model)
+    private static void AddSignInRoutes(DistributedApplicationModel model, bool isPublishMode)
     {
         foreach (var resource in model.Resources)
         {
@@ -242,23 +289,42 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                         throw new InvalidOperationException($"A Traefik route of resource '{resource.Name}' uses the oauth2-proxy middleware '{middleware.Name}', but has no host. The sign-in callback needs one.");
                     }
 
-                    // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once.
-                    if (middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
-                    {
-                        continue;
-                    }
-
-                    middleware.ProtectedHosts.Add(host);
-                    middleware.OAuth2Proxy!.Annotations.Add(new TraefikRouteAnnotation(annotation.Traefik, new TraefikRouteOptions
-                    {
-                        Host = host,
-                        PathPrefix = "/oauth2",
-                        Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
-                        EntryPoint = annotation.Options.EntryPoint,
-                        RouterName = $"{middleware.OAuth2Proxy.Name}-{middleware.ProtectedHosts.Count}",
-                    }, IsSignInRoute: true));
+                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint);
                 }
             }
+        }
+
+        foreach (var traefik in model.Resources.OfType<TraefikResource>())
+        {
+            // An external Traefik's dashboard isn't published (see WithDashboard), so neither is its sign-in route.
+            if (traefik.DashboardHost is not { } host || (isPublishMode && traefik.PublishExternal is not null))
+            {
+                continue;
+            }
+
+            foreach (var middleware in traefik.DashboardMiddlewares.SelectMany(m => m.WithReferences()).Where(m => m.OAuth2Proxy is not null).Distinct())
+            {
+                AddSignInRoute(middleware, traefik, host, entryPoint: null);
+            }
+        }
+
+        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint)
+        {
+            // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once.
+            if (middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
+            {
+                return;
+            }
+
+            middleware.ProtectedHosts.Add(host);
+            middleware.OAuth2Proxy!.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
+            {
+                Host = host,
+                PathPrefix = "/oauth2",
+                Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
+                EntryPoint = entryPoint,
+                RouterName = $"{middleware.OAuth2Proxy.Name}-{middleware.ProtectedHosts.Count}",
+            }, IsSignInRoute: true));
         }
     }
 

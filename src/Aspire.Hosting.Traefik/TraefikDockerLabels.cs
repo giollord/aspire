@@ -179,7 +179,7 @@ internal static class TraefikDockerLabels
 
     private const string MiddlewareValueVariablePrefix = "ASPIRE_TRAEFIK_MIDDLEWARE_";
 
-    private static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
+    internal static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
         middleware.Options.GetEndpointExpressions()
             .Select((expression, i) => (expression, variable: GetMiddlewareValueVariableName(middleware, i + 1)))
             // Options hold the expression objects themselves, so they are matched by reference.

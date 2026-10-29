@@ -23,10 +23,12 @@ aspire run
 | `http://secure.dev.localhost:8000` | `traefik/whoami` container | Single sign-on with Keycloak through oauth2-proxy. Sign in as `alice` / `alice`; the echoed request shows the `X-Auth-Request-*` headers. |
 | `http://auth.dev.localhost:8000` | Keycloak | The Keycloak realm `traefik-demo`, imported from `Traefik.AppHost/Realms`. |
 | Traefik resource → **Dashboard** link | Traefik API | The Traefik dashboard with the generated routers and services. |
+| `http://traefik.dev.localhost:8000/dashboard/` | Traefik API | The same dashboard, routed on a host behind basic authentication (`admin` / `admin`). |
 
 Middlewares:
 
 - `whoami` (both routes) uses the `defaults` chain: security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`; HSTS on HTTPS only) and compression. Check the response headers in the browser's developer tools.
+- Every router on the default entry point gets the `served-by` entry-point middleware, which adds `X-Served-By: aspire-traefik` to responses.
 - `api` (all routes) is rate-limited to 20 requests per second with bursts of 40; more get `429`.
 - The middlewares appear under `traefik` in the Aspire dashboard and in the Traefik dashboard.
 
@@ -52,7 +54,7 @@ Set `Traefik:EnableHttps` to `true` to add the `websecure` entry point with a re
 aspire publish -o ./out
 ```
 
-`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them.
+`out/docker-compose.yaml` contains a Traefik service using the Docker provider and `traefik.*` labels on `whoami` and `api`, with `${DOMAIN}` in the host rules. The middleware definitions are labels on the services that use them. Traefik's own configuration, the dashboard router on `traefik.${DOMAIN}` and the entry-point middleware, is the `traefik-dynamic` config.
 
 When published, Keycloak and oauth2-proxy use `https://auth.${DOMAIN}` and `https://secure.${DOMAIN}`; the realm's redirect URI follows from `GetTraefikUrl()`.
 

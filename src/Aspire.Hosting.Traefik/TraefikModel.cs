@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Docker;
 
 namespace Aspire.Hosting.Traefik;
 
@@ -58,6 +59,14 @@ internal sealed record TraefikExternalSettings(string Network, ReferenceExpressi
 /// A custom entry point added with <c>WithEntryPoint</c>.
 /// </summary>
 internal sealed record TraefikEntryPoint(string Name, int TargetPort);
+
+/// <summary>
+/// A Docker Compose config holding the dynamic configuration of a managed Traefik at publish time.
+/// </summary>
+/// <param name="Environment">The Docker Compose environment the Traefik service belongs to.</param>
+/// <param name="Name">The name of the config in the compose file.</param>
+/// <param name="Content">The YAML content, with <c>${VAR}</c> placeholders that Docker Compose interpolates.</param>
+internal sealed record TraefikPublishFileConfiguration(DockerComposeEnvironmentResource Environment, string Name, string Content);
 
 /// <summary>
 /// Records an HTTP route declared on a routed resource with <c>WithTraefikRoute</c>.

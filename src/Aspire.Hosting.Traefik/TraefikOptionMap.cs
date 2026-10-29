@@ -98,9 +98,15 @@ internal sealed partial class TraefikOptionMap
     }
 
     /// <summary>
-    /// Renders the tree for the file provider, resolving expressions from Traefik's point of view.
+    /// Renders the tree for the file provider.
     /// </summary>
-    public async Task<Dictionary<string, object>> ToFileConfigurationAsync(ValueProviderContext context, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Synchronous so the same rendering serves run mode, where the expressions are resolved beforehand, and publish
+    /// time, where the Docker Compose callbacks that render them are synchronous.
+    /// </remarks>
+    /// <param name="renderExpression">Renders an expression: its resolved value in run mode, a Docker Compose placeholder at publish time.</param>
+    /// <param name="renderLiteral">Renders literal text, which Docker Compose needs escaped at publish time.</param>
+    public Dictionary<string, object> ToFileConfiguration(Func<ReferenceExpression, string> renderExpression, Func<string, string> renderLiteral)
     {
         var result = new Dictionary<string, object>(_entries.Count);
 
@@ -108,27 +114,15 @@ internal sealed partial class TraefikOptionMap
         {
             result[key] = value switch
             {
-                TraefikOptionMap map => await map.ToFileConfigurationAsync(context, cancellationToken).ConfigureAwait(false),
-                IReadOnlyList<object> list => await ResolveListAsync(list, context, cancellationToken).ConfigureAwait(false),
-                ReferenceExpression expression => await expression.GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty,
+                TraefikOptionMap map => map.ToFileConfiguration(renderExpression, renderLiteral),
+                IReadOnlyList<object> list => list.Select(item => item is ReferenceExpression expression ? renderExpression(expression) : renderLiteral((string)item)).ToList(),
+                ReferenceExpression expression => renderExpression(expression),
+                string text => renderLiteral(text),
                 _ => value,
             };
         }
 
         return result;
-
-        static async Task<List<string>> ResolveListAsync(IReadOnlyList<object> list, ValueProviderContext context, CancellationToken cancellationToken)
-        {
-            var items = new List<string>(list.Count);
-            foreach (var item in list)
-            {
-                items.Add(item is ReferenceExpression expression
-                    ? await expression.GetValueAsync(context, cancellationToken).ConfigureAwait(false) ?? string.Empty
-                    : (string)item);
-            }
-
-            return items;
-        }
     }
 
     /// <summary>
