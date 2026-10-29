@@ -43,15 +43,12 @@ public static class TraefikRoutingExtensions
         return builder.WithTraefikRoute(traefik, ReferenceExpression.Create($"{host}"), middlewares);
     }
 
-    /// <summary>
-    /// Routes HTTP requests for <paramref name="host"/> through <paramref name="traefik"/> to this resource.
-    /// </summary>
+    /// <inheritdoc cref="WithTraefikRoute{T}(IResourceBuilder{T}, IResourceBuilder{TraefikResource}, string, IResourceBuilder{TraefikMiddlewareResource}[])"/>
     /// <typeparam name="T">The type of the routed resource.</typeparam>
     /// <param name="builder">The builder of the routed resource.</param>
     /// <param name="traefik">The Traefik resource that receives the requests.</param>
     /// <param name="host">The host name to match. It can reference parameters, which stay placeholders at publish time.</param>
     /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <example>
     /// <code lang="csharp">
     /// var domain = builder.AddParameter("domain");
@@ -81,8 +78,18 @@ public static class TraefikRoutingExtensions
     }
 
     /// <summary>
-    /// Routes HTTP requests through <paramref name="traefik"/> to this resource.
+    /// Routes HTTP requests for <paramref name="host"/> through <paramref name="traefik"/> to this resource.
     /// </summary>
+    /// <typeparam name="T">The type of the routed resource.</typeparam>
+    /// <param name="builder">The builder of the routed resource.</param>
+    /// <param name="traefik">The Traefik resource that receives the requests.</param>
+    /// <param name="host">The host name to match, for example <c>api.dev.localhost</c>. It can reference parameters.</param>
+    /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
+    /// <returns>A reference to the routed resource builder.</returns>
+    /// <remarks>
+    /// Requests go to the resource's <c>http</c> endpoint. Use <c>withTraefikRouteOptions</c> to choose another endpoint,
+    /// match a path prefix, or name the router. A resource can have several routes.
+    /// </remarks>
     [AspireExport("withTraefikRoute")]
     internal static IResourceBuilder<T> WithTraefikRoutePolyglot<T>(
         this IResourceBuilder<T> builder,

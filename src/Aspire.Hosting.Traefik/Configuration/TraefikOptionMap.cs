@@ -31,8 +31,14 @@ internal sealed partial class TraefikOptionMap
     // Traefik matches option names case-insensitively in every provider, so `prefixes` and `Prefixes` are one key.
     private readonly OrderedDictionary<string, object> _entries = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Gets the number of top-level options.
+    /// </summary>
     public int Count => _entries.Count;
 
+    /// <summary>
+    /// Gets the top-level options in the order they were first set. Nested options are <see cref="TraefikOptionMap"/>s.
+    /// </summary>
     public IEnumerable<KeyValuePair<string, object>> Entries => _entries;
 
     /// <summary>
@@ -182,6 +188,9 @@ internal sealed partial class TraefikOptionMap
     public IEnumerable<IResource> GetReferencedResources() =>
         GetEndpointExpressions().SelectMany(GetEndpointResources).Distinct();
 
+    /// <summary>
+    /// Gets a value indicating whether an expression references an endpoint, whose address differs per mode.
+    /// </summary>
     internal static bool ReferencesEndpoint(ReferenceExpression expression) => GetEndpointResources(expression).Any();
 
     private static IEnumerable<IResource> GetEndpointResources(ReferenceExpression expression) =>

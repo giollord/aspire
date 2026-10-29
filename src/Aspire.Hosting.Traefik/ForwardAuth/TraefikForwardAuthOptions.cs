@@ -58,6 +58,9 @@ public sealed class TraefikForwardAuthOptions
     /// </summary>
     public bool? PreserveRequestMethod { get; set; }
 
+    /// <summary>
+    /// Sets the options that have a value on the middleware. Unset options keep Traefik's defaults.
+    /// </summary>
     internal void ApplyTo(TraefikOptionMap options)
     {
         SetList(options, "authResponseHeaders", AuthResponseHeaders);

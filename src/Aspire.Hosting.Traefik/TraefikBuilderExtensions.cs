@@ -21,6 +21,7 @@ public static partial class TraefikBuilderExtensions
 {
     private const string DockerSocketPath = "/var/run/docker.sock";
 
+    // The endpoint of the socket proxy container that Traefik's Docker provider connects to.
     internal const string SocketProxyEndpointName = "docker";
 
     // The port docker-socket-proxy serves the filtered Docker API on.
@@ -622,8 +623,15 @@ public static partial class TraefikBuilderExtensions
     /// <paramref name="network"/>.
     /// </para>
     /// <para>
-    /// Public URLs use HTTPS unless <paramref name="entryPoint"/> is <c>web</c>. When <paramref name="certResolver"/> is not
-    /// set, the entry point is expected to configure TLS itself (<c>entrypoints.&lt;name&gt;.http.tls</c>).
+    /// Public URLs use HTTPS unless <paramref name="entryPoint"/> is the literal <c>web</c> and no resolver is set; a
+    /// parameterized entry point is assumed to be HTTPS. When <paramref name="certResolver"/> is not set, the entry point
+    /// is expected to configure TLS itself (<c>entrypoints.&lt;name&gt;.http.tls</c>).
+    /// </para>
+    /// <para>
+    /// The entry point and resolver only appear in <c>traefik.*</c> label values, so they can be parameters, which
+    /// become <c>${VAR}</c> placeholders in the generated <c>.env</c> file; one AppHost can then target servers whose
+    /// Traefik uses different names. The network name can't be a parameter: Docker Compose doesn't interpolate the YAML
+    /// keys it is written to.
     /// </para>
     /// </remarks>
     /// <example>
@@ -649,27 +657,11 @@ public static partial class TraefikBuilderExtensions
             certResolver is null ? null : ReferenceExpression.Create($"{certResolver}"));
     }
 
-    /// <summary>
-    /// Uses a Traefik that already runs on the deployment target instead of deploying this container at publish time,
-    /// with an entry point and certificate resolver that can reference parameters.
-    /// </summary>
+    /// <inheritdoc cref="PublishAsExternal(IResourceBuilder{TraefikResource}, string, string, string?)"/>
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="network">The Docker network the external Traefik is attached to. Routed services join it, and it is declared as an external network.</param>
-    /// <param name="entryPoint">The entry point of the external Traefik that routes use.</param>
-    /// <param name="certResolver">The certificate resolver defined on the external Traefik that routes use, if any.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// <para>
-    /// The entry point and resolver only appear in <c>traefik.*</c> label values, so parameters in them become
-    /// <c>${VAR}</c> placeholders in the generated <c>.env</c> file, and one AppHost can target servers whose Traefik
-    /// uses different names. The network name can't be a parameter: Docker Compose doesn't interpolate the YAML keys
-    /// it is written to.
-    /// </para>
-    /// <para>
-    /// Public URLs use HTTPS unless <paramref name="entryPoint"/> is the literal <c>web</c> and no resolver is set. A
-    /// parameterized entry point is assumed to be HTTPS.
-    /// </para>
-    /// </remarks>
+    /// <param name="entryPoint">The entry point of the external Traefik that routes use. It can reference parameters.</param>
+    /// <param name="certResolver">The certificate resolver defined on the external Traefik that routes use, if any. It can reference parameters.</param>
     /// <example>
     /// <code lang="csharp">
     /// var entryPoint = builder.AddParameter("traefik-entrypoint");
@@ -725,6 +717,15 @@ public static partial class TraefikBuilderExtensions
     /// <summary>
     /// Uses a Traefik that already runs on the deployment target instead of deploying this container at publish time.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="network">The Docker network the external Traefik is attached to. Routed services join it, and it is declared as an external network.</param>
+    /// <param name="entryPoint">The entry point of the external Traefik that routes use, as a string or a reference expression. Defaults to <c>websecure</c>.</param>
+    /// <param name="certResolver">The certificate resolver defined on the external Traefik that routes use, if any, as a string or a reference expression.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
+    /// <remarks>
+    /// Run mode is unchanged: Aspire still runs the Traefik container. At publish time the container is left out, and the
+    /// routed services get labels for the external Traefik, which must use the Docker provider and be attached to the network.
+    /// </remarks>
     [AspireExport("publishAsExternal")]
     internal static IResourceBuilder<TraefikResource> PublishAsExternalPolyglot(
         this IResourceBuilder<TraefikResource> builder,

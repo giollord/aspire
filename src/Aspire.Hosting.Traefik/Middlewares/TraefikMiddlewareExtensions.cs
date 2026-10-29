@@ -160,6 +160,13 @@ public static partial class TraefikMiddlewareExtensions
     /// <summary>
     /// Sets an option of a Traefik middleware.
     /// </summary>
+    /// <param name="builder">The middleware resource builder.</param>
+    /// <param name="path">The option name, with dots for nested options, for example <c>customRequestHeaders.X-Script-Name</c>.</param>
+    /// <param name="value">The value: a string, a reference expression, a parameter, a boolean, a number, or a list of strings.</param>
+    /// <returns>A reference to the middleware resource builder.</returns>
+    /// <remarks>
+    /// Setting the same option again replaces the value. Option names are case-insensitive, as in Traefik.
+    /// </remarks>
     [AspireExport("withOption")]
     internal static IResourceBuilder<TraefikMiddlewareResource> WithOptionPolyglot(
         this IResourceBuilder<TraefikMiddlewareResource> builder,

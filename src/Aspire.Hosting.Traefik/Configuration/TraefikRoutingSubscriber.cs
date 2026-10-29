@@ -27,6 +27,7 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventingSubscriber
 {
+    /// <inheritdoc/>
     public Task SubscribeAsync(IDistributedApplicationEventing eventing, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
     {
         eventing.Subscribe<BeforeStartEvent>((@event, _) =>
@@ -38,6 +39,10 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Resolves the routes of every routed resource and applies them to Traefik's configuration or the Docker Compose
+    /// services. It can run again: the routes it generates are recreated each time.
+    /// </summary>
     internal static void ApplyRoutes(DistributedApplicationModel model, bool isPublishMode)
     {
         foreach (var traefik in model.Resources.OfType<TraefikResource>())

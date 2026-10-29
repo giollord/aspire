@@ -41,6 +41,7 @@ public static partial class TraefikBuilderExtensions
     /// <param name="host">The host the dashboard is served on, for example <c>traefik.example.com</c>.</param>
     /// <param name="middlewares">The middlewares that protect the dashboard, in the order Traefik runs them. At least one is required.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="middlewares"/> is empty, or a middleware belongs to another Traefik.</exception>
     /// <remarks>
     /// <para>
     /// The dashboard router uses the default entry point of the routes, with TLS when <c>WithLetsEncrypt</c> is used, and
@@ -76,17 +77,14 @@ public static partial class TraefikBuilderExtensions
         return builder.WithDashboard(ReferenceExpression.Create($"{host}"), middlewares);
     }
 
-    /// <summary>
-    /// Enables the Traefik dashboard and routes it on a host that can reference parameters, behind middlewares such as
-    /// authentication.
-    /// </summary>
+    /// <inheritdoc cref="WithDashboard(IResourceBuilder{TraefikResource}, string, IResourceBuilder{TraefikMiddlewareResource}[])"/>
     /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="host">The host the dashboard is served on, for example <c>traefik.{domain}</c>.</param>
+    /// <param name="host">
+    /// The host the dashboard is served on. It can reference parameters, for example
+    /// <c>ReferenceExpression.Create($"traefik.{domain}")</c>, which stay placeholders at publish time.
+    /// </param>
     /// <param name="middlewares">The middlewares that protect the dashboard, in the order Traefik runs them. At least one is required.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// See <see cref="WithDashboard(IResourceBuilder{TraefikResource}, string, IResourceBuilder{TraefikMiddlewareResource}[])"/>.
-    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="middlewares"/> is empty, or a middleware belongs to another Traefik.</exception>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withDashboardRoute export, which accepts a string or a reference expression.")]
     public static IResourceBuilder<TraefikResource> WithDashboard(this IResourceBuilder<TraefikResource> builder, ReferenceExpression host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
     {
@@ -130,9 +128,18 @@ public static partial class TraefikBuilderExtensions
         return builder;
     }
 
+    // Polyglot exports keep their own docs: the ATS capability scanner reads the XML documentation file as written,
+    // without resolving <inheritdoc>.
     /// <summary>
     /// Enables the Traefik dashboard and routes it on a host, behind middlewares such as authentication.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="host">The host the dashboard is served on, for example <c>traefik.example.com</c>. It can reference parameters.</param>
+    /// <param name="middlewares">The middlewares that protect the dashboard, in the order Traefik runs them. At least one is required.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
+    /// <remarks>
+    /// The dashboard is served at <c>/dashboard/</c> on the host, on the default entry point of the routes.
+    /// </remarks>
     [AspireExport("withDashboardRoute")]
     internal static IResourceBuilder<TraefikResource> WithDashboardPolyglot(
         this IResourceBuilder<TraefikResource> builder,

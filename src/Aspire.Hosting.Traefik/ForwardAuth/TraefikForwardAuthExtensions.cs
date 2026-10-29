@@ -18,15 +18,15 @@ public static class TraefikForwardAuthExtensions
     private const int OAuth2ProxyPort = 4180;
 
     /// <summary>
-    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server running in the application whether a
-    /// request may pass.
+    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="name">The name of the middleware.</param>
-    /// <param name="endpoint">The endpoint of the authentication server.</param>
+    /// <param name="endpoint">The endpoint of an authentication server running in the application.</param>
     /// <param name="path">The path of the authentication request on that endpoint, for example <c>/verify</c>.</param>
     /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
     /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="path"/> doesn't start with <c>/</c>.</exception>
     /// <remarks>
     /// <para>
     /// Traefik sends a request to the authentication server for every request on the routes that use the middleware,
@@ -65,17 +65,14 @@ public static class TraefikForwardAuthExtensions
             .WithRelationship(endpoint.Resource, "ForwardAuth");
     }
 
-    /// <summary>
-    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
-    /// </summary>
+    /// <inheritdoc cref="AddForwardAuth(IResourceBuilder{TraefikResource}, string, EndpointReference, string, Action{TraefikForwardAuthOptions}?)"/>
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="name">The name of the middleware.</param>
-    /// <param name="address">The URL of the authentication request. It can reference parameters and endpoints.</param>
+    /// <param name="address">
+    /// The URL of the authentication request. It can reference parameters and endpoints, for example
+    /// <c>ReferenceExpression.Create($"{auth.GetEndpoint("http")}/verify?realm={realm}")</c>.
+    /// </param>
     /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
-    /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// See <see cref="AddForwardAuth(IResourceBuilder{TraefikResource}, string, EndpointReference, string, Action{TraefikForwardAuthOptions}?)"/>.
-    /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal addForwardAuth export, which accepts an endpoint, a string, or a reference expression.")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, ReferenceExpression address, Action<TraefikForwardAuthOptions>? configure = null)
     {
@@ -91,15 +88,21 @@ public static class TraefikForwardAuthExtensions
         return middleware;
     }
 
-    /// <summary>
-    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server outside the application whether a request
-    /// may pass.
-    /// </summary>
+    /// <inheritdoc cref="AddForwardAuth(IResourceBuilder{TraefikResource}, string, EndpointReference, string, Action{TraefikForwardAuthOptions}?)"/>
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="name">The name of the middleware.</param>
-    /// <param name="address">The absolute URL of the authentication request, for example <c>https://auth.example.com/verify</c>.</param>
+    /// <param name="address">
+    /// The absolute URL of an authentication server outside the application, for example <c>https://auth.example.com/verify</c>.
+    /// </param>
     /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
-    /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="address"/> isn't an absolute HTTP or HTTPS URL.</exception>
+    /// <example>
+    /// <code lang="csharp">
+    /// var forwardAuth = traefik.AddForwardAuth("auth-check", "https://auth.example.com/verify");
+    ///
+    /// api.WithTraefikMiddleware(forwardAuth);
+    /// </code>
+    /// </example>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal addForwardAuth export, which accepts an endpoint, a string, or a reference expression.")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string address, Action<TraefikForwardAuthOptions>? configure = null)
     {
@@ -116,6 +119,19 @@ public static class TraefikForwardAuthExtensions
     /// <summary>
     /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="name">The name of the middleware.</param>
+    /// <param name="address">
+    /// The authentication server: an endpoint of a resource in the application, an absolute URL, or a reference expression
+    /// that builds the URL.
+    /// </param>
+    /// <param name="path">The path of the authentication request on an endpoint, for example <c>/verify</c>. Only valid with an endpoint.</param>
+    /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
+    /// <returns>A reference to the middleware's resource builder.</returns>
+    /// <remarks>
+    /// A <c>2xx</c> response lets the request through; any other response, for example a redirect to a sign-in page, is
+    /// returned to the client.
+    /// </remarks>
     [AspireExport("addForwardAuth", RunSyncOnBackgroundThread = true)]
     internal static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuthPolyglot(
         this IResourceBuilder<TraefikResource> builder,

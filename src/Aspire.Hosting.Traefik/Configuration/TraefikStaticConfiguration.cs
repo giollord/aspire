@@ -35,6 +35,9 @@ internal static class TraefikStaticConfiguration
 
     private const string LetsEncryptStagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
+    /// <summary>
+    /// Adds the static configuration of a managed Traefik as command-line arguments.
+    /// </summary>
     public static void AddArguments(TraefikResource traefik, CommandLineArgsCallbackContext context)
     {
         var isPublishMode = context.ExecutionContext.IsPublishMode;
@@ -438,6 +441,9 @@ internal static class TraefikStaticConfiguration
         args.Add("--metrics.otlp.addrouterslabels=true");
     }
 
+    /// <summary>
+    /// Gets the endpoint of an entry point as seen from the host, whose port is the one clients use.
+    /// </summary>
     internal static EndpointReference GetHostEndpoint(TraefikResource traefik, string entryPointName) =>
         // Pin the localhost network so the value is the host port even when the expression is evaluated for a
         // container (Traefik's own arguments, or another container's environment).

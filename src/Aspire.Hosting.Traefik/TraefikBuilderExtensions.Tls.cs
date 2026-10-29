@@ -168,6 +168,7 @@ public static partial class TraefikBuilderExtensions
     /// <param name="main">The main domain of the certificate, for example <c>example.com</c>.</param>
     /// <param name="sans">The subject alternative names, for example <c>*.example.com</c>.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentException">A name is empty or contains <c>,</c>.</exception>
     /// <remarks>
     /// <para>
     /// Without TLS domains, Traefik requests a certificate per router host. With them, the default resolver requests one
@@ -194,17 +195,11 @@ public static partial class TraefikBuilderExtensions
             })]);
     }
 
-    /// <summary>
-    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, with names that
-    /// can reference parameters, for example <c>*.{domain}</c>.
-    /// </summary>
+    /// <inheritdoc cref="WithTlsDomain(IResourceBuilder{TraefikResource}, string, string[])"/>
     /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="main">The main domain of the certificate.</param>
-    /// <param name="sans">The subject alternative names.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// See <see cref="WithTlsDomain(IResourceBuilder{TraefikResource}, string, string[])"/>.
-    /// </remarks>
+    /// <param name="main">The main domain of the certificate. It can reference parameters, for example <c>ReferenceExpression.Create($"{domain}")</c>.</param>
+    /// <param name="sans">The subject alternative names, for example <c>ReferenceExpression.Create($"*.{domain}")</c>.</param>
+    /// <exception cref="ArgumentException">A name contains <c>,</c>.</exception>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTlsDomain export, which accepts strings or reference expressions.")]
     public static IResourceBuilder<TraefikResource> WithTlsDomain(this IResourceBuilder<TraefikResource> builder, ReferenceExpression main, params ReferenceExpression[] sans)
     {
@@ -229,12 +224,18 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
-    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point.
+    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, for example a
+    /// wildcard certificate.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="main">The main domain of the certificate, for example <c>example.com</c>. It can reference parameters.</param>
+    /// <param name="sans">The subject alternative names as reference expressions, for example <c>*.example.com</c>.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
     /// <remarks>
-    /// The alternative names are reference expressions only, such as <c>refExpr`*.${domain}`</c>: ATS has no arrays of
-    /// unions, and a union on an <c>object[]</c> parameter is exported as a single value.
+    /// A wildcard requires the DNS-01 challenge on the default resolver. The domains only apply at publish time.
     /// </remarks>
+    // The alternative names are reference expressions only: ATS has no arrays of unions, and a union on an `object[]`
+    // parameter is exported as a single value.
     [AspireExport("withTlsDomain")]
     internal static IResourceBuilder<TraefikResource> WithTlsDomainPolyglot(
         this IResourceBuilder<TraefikResource> builder,
@@ -254,6 +255,16 @@ public static partial class TraefikBuilderExtensions
     /// <summary>
     /// Enables HTTPS with certificates issued by Let's Encrypt.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="email">The email address registered with Let's Encrypt, used for expiry notices. A string, a parameter, or a reference expression.</param>
+    /// <param name="resolverName">The name of the Traefik certificate resolver.</param>
+    /// <param name="challenge">The ACME challenge used to prove control of the domains.</param>
+    /// <param name="staging">Whether to use the Let's Encrypt staging environment, which has higher rate limits but issues untrusted certificates.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
+    /// <remarks>
+    /// Adds the <c>websecure</c> entry point and makes routes use it with TLS. Certificates are only requested at publish
+    /// time; in run mode Traefik serves the HTTPS certificate from Aspire.
+    /// </remarks>
     [AspireExport("withLetsEncrypt")]
     internal static IResourceBuilder<TraefikResource> WithLetsEncryptPolyglot(
         this IResourceBuilder<TraefikResource> builder,
@@ -322,6 +333,7 @@ public static partial class TraefikBuilderExtensions
     /// <param name="builder">The Traefik resource builder.</param>
     /// <param name="caServer">The ACME directory URL, for example <c>https://acme-staging-v02.api.letsencrypt.org/directory</c>.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="caServer"/> isn't an absolute HTTP or HTTPS URL.</exception>
     /// <remarks>
     /// Use it instead of the <c>staging</c> argument of <c>WithLetsEncrypt</c> to choose the directory per
     /// deployment, or to use another ACME certificate authority. Like the other ACME settings it only applies at
@@ -345,6 +357,8 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <inheritdoc cref="WithAcmeCaServer(IResourceBuilder{TraefikResource}, string)"/>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="caServer">A parameter holding the ACME directory URL, so it can differ per deployment.</param>
     /// <example>
     /// Default to the production directory and switch a test deployment to staging in its <c>.env</c> file:
     /// <code lang="csharp">
@@ -367,8 +381,12 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
-    /// Sets the ACME directory URL of the Let's Encrypt certificate resolver.
+    /// Sets the ACME directory URL that the certificate resolver configured with <c>withLetsEncrypt</c> requests
+    /// certificates from.
     /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="caServer">The ACME directory URL, as a string or a parameter, for example <c>https://acme-staging-v02.api.letsencrypt.org/directory</c>.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
     [AspireExport("withAcmeCaServer")]
     internal static IResourceBuilder<TraefikResource> WithAcmeCaServerPolyglot(
         this IResourceBuilder<TraefikResource> builder,

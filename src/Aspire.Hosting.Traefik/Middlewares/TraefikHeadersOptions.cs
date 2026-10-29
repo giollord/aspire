@@ -100,6 +100,9 @@ public sealed class TraefikHeadersOptions
     /// </summary>
     public string? PermissionsPolicy { get; set; }
 
+    /// <summary>
+    /// Sets the options that have a value on the middleware. Unset options keep Traefik's defaults.
+    /// </summary>
     internal void ApplyTo(TraefikOptionMap options)
     {
         foreach (var (name, value) in CustomRequestHeaders)

@@ -26,6 +26,10 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal static class TraefikLoadBalancer
 {
+    /// <summary>
+    /// Gets the load balancer options of a route other than its servers, in the casing of the file provider. Options the
+    /// route doesn't set are left out, so Traefik's defaults apply.
+    /// </summary>
     public static Dictionary<string, object> GetOptions(TraefikRoute route)
     {
         var options = new Dictionary<string, object>();

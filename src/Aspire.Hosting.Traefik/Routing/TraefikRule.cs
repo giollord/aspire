@@ -41,10 +41,11 @@ public sealed class TraefikRule
 
     /// <summary>Matches requests for a host name, for example <c>api.example.com</c> or <c>*.example.com</c>.</summary>
     /// <param name="host">The host name.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule Host(string host) => Matcher(nameof(Host), host);
 
-    /// <summary>Matches requests for a host name that can reference parameters.</summary>
-    /// <param name="host">The host name, for example <c>ReferenceExpression.Create($"api.{domain}")</c>.</param>
+    /// <inheritdoc cref="Host(string)"/>
+    /// <param name="host">The host name. It can reference parameters, for example <c>ReferenceExpression.Create($"api.{domain}")</c>.</param>
     public static TraefikRule Host(ReferenceExpression host) => Matcher(nameof(Host), host);
 
     // TCP routers have their own matchers. Only HostSNI is needed, for TraefikTcpRouteOptions, so it isn't public: TCP
@@ -52,64 +53,80 @@ public sealed class TraefikRule
     // https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/
     internal static TraefikRule HostSni(ReferenceExpression host) => Matcher("HostSNI", host);
 
+    // Matches every TCP connection, including plain TCP without a server name.
     internal static TraefikRule AnyHostSni() => Matcher("HostSNI", "*");
 
     /// <summary>Matches requests whose host name matches a regular expression.</summary>
     /// <param name="regex">The regular expression, in Go syntax.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule HostRegexp(string regex) => Matcher(nameof(HostRegexp), regex);
 
     /// <summary>Matches requests whose path is exactly <paramref name="path"/>.</summary>
     /// <param name="path">The path, starting with <c>/</c>.</param>
+    /// <returns>The matcher.</returns>
+    /// <exception cref="ArgumentException"><paramref name="path"/> doesn't start with <c>/</c>.</exception>
     public static TraefikRule Path(string path) => Matcher(nameof(Path), RequirePath(path, nameof(path)));
 
     /// <summary>Matches requests whose path starts with <paramref name="prefix"/>.</summary>
     /// <param name="prefix">The prefix, starting with <c>/</c>.</param>
+    /// <returns>The matcher.</returns>
+    /// <exception cref="ArgumentException"><paramref name="prefix"/> doesn't start with <c>/</c>.</exception>
     public static TraefikRule PathPrefix(string prefix) => Matcher(nameof(PathPrefix), RequirePath(prefix, nameof(prefix)));
 
     /// <summary>Matches requests whose path matches a regular expression.</summary>
     /// <param name="regex">The regular expression, in Go syntax.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule PathRegexp(string regex) => Matcher(nameof(PathRegexp), regex);
 
     /// <summary>Matches requests with an HTTP method, for example <c>GET</c>.</summary>
     /// <param name="method">The method.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule Method(string method) => Matcher(nameof(Method), method);
 
     /// <summary>Matches requests that have a header with a value.</summary>
     /// <param name="name">The header name.</param>
     /// <param name="value">The header value.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule Header(string name, string value) => Matcher(nameof(Header), name, value);
 
     /// <summary>Matches requests that have a header whose value matches a regular expression.</summary>
     /// <param name="name">The header name.</param>
     /// <param name="regex">The regular expression, in Go syntax.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule HeaderRegexp(string name, string regex) => Matcher(nameof(HeaderRegexp), name, regex);
 
     /// <summary>Matches requests that have a query parameter with a value.</summary>
     /// <param name="name">The query parameter name.</param>
     /// <param name="value">The value.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule Query(string name, string value) => Matcher(nameof(Query), name, value);
 
     /// <summary>Matches requests that have a query parameter whose value matches a regular expression.</summary>
     /// <param name="name">The query parameter name.</param>
     /// <param name="regex">The regular expression, in Go syntax.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule QueryRegexp(string name, string regex) => Matcher(nameof(QueryRegexp), name, regex);
 
     /// <summary>Matches requests from a client address or CIDR range. <c>X-Forwarded-For</c> is ignored.</summary>
     /// <param name="ip">The address or range, for example <c>10.0.0.0/8</c>.</param>
+    /// <returns>The matcher.</returns>
     public static TraefikRule ClientIP(string ip) => Matcher(nameof(ClientIP), ip);
 
     /// <summary>Matches requests that match both rules.</summary>
     /// <param name="left">The first rule.</param>
     /// <param name="right">The second rule.</param>
+    /// <returns>The combined rule.</returns>
     public static TraefikRule operator &(TraefikRule left, TraefikRule right) => Combine("&&", left, right);
 
     /// <summary>Matches requests that match either rule.</summary>
     /// <param name="left">The first rule.</param>
     /// <param name="right">The second rule.</param>
+    /// <returns>The combined rule.</returns>
     public static TraefikRule operator |(TraefikRule left, TraefikRule right) => Combine("||", left, right);
 
     /// <summary>Matches requests that don't match the rule.</summary>
     /// <param name="rule">The rule to invert.</param>
+    /// <returns>The inverted rule.</returns>
     public static TraefikRule operator !(TraefikRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);
@@ -131,6 +148,9 @@ public sealed class TraefikRule
     /// <returns>The inverted rule.</returns>
     public TraefikRule Not() => !this;
 
+    /// <summary>
+    /// Appends the rule in Traefik's syntax, keeping expression values as value providers so parameters resolve per mode.
+    /// </summary>
     internal void WriteTo(ReferenceExpressionBuilder builder)
     {
         if (_matcher is not null)

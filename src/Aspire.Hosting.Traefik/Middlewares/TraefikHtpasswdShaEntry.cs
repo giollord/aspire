@@ -23,10 +23,13 @@ internal sealed class TraefikHtpasswdShaEntry(string user, ParameterResource pas
 {
     // ReferenceExpression reads this when the expression is created, so it can't throw. It never reaches a manifest
     // or a published file: AddBasicAuth refuses plain passwords when publishing.
+    /// <inheritdoc/>
     public string ValueExpression => $"{user}:{{SHA}}({password.ValueExpression})";
 
+    /// <inheritdoc/>
     public IEnumerable<object> References => [password];
 
+    /// <inheritdoc/>
     public async ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default)
     {
         var value = await password.GetValueAsync(cancellationToken).ConfigureAwait(false);

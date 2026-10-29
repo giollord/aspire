@@ -29,6 +29,9 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal static class TraefikDockerLabels
 {
+    /// <summary>
+    /// Writes the labels of an HTTP route: its router, its service, and the middlewares it uses.
+    /// </summary>
     public static void Apply(DockerComposeServiceResource composeService, Service service, TraefikRoute route, TraefikRouteDefaults defaults)
     {
         var labels = service.Labels;
@@ -186,7 +189,11 @@ internal static class TraefikDockerLabels
     internal static string GetTargetPortVariableName(TraefikRoute route) =>
         $"ASPIRE_TRAEFIK_TARGET_PORT_{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
-    // TCP and UDP routers have their own namespaces, so their names can repeat an HTTP router's.
+    /// <inheritdoc cref="GetTargetPortVariableName(TraefikRoute)"/>
+    /// <remarks>
+    /// The protocol is part of the name because TCP and UDP routers have their own namespaces, so their names can repeat
+    /// an HTTP router's.
+    /// </remarks>
     internal static string GetTargetPortVariableName(TraefikTransportRoute route) =>
         $"ASPIRE_TRAEFIK_TARGET_PORT_{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
@@ -255,6 +262,9 @@ internal static class TraefikDockerLabels
 
     private const string MiddlewareValueVariablePrefix = "ASPIRE_TRAEFIK_MIDDLEWARE_";
 
+    /// <summary>
+    /// Gets the temporary environment variable that carries each endpoint-referencing value of a middleware's options.
+    /// </summary>
     internal static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
         middleware.Options.GetEndpointExpressions()
             .Select((expression, i) => (expression, variable: GetMiddlewareValueVariableName(middleware, i + 1)))
@@ -301,5 +311,8 @@ internal static class TraefikDockerLabels
         return string.Format(CultureInfo.InvariantCulture, EscapeLiteral(expression.Format), args);
     }
 
+    /// <summary>
+    /// Escapes <c>$</c> as <c>$$</c>, so Docker Compose doesn't interpolate a literal value.
+    /// </summary>
     internal static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
 }

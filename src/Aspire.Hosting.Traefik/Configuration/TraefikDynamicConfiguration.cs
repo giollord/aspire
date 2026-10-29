@@ -39,6 +39,7 @@ internal static class TraefikDynamicConfiguration
 
     internal const string TlsFileName = "aspire-tls.yml";
 
+    // The container paths of the HTTPS certificate from Aspire and its key, which TlsFileContent reads.
     internal const string TlsCertificateVariable = "ASPIRE_TRAEFIK_TLS_CERTIFICATE";
 
     internal const string TlsKeyVariable = "ASPIRE_TRAEFIK_TLS_KEY";
@@ -71,6 +72,9 @@ internal static class TraefikDynamicConfiguration
     // https://doc.traefik.io/traefik/reference/install-configuration/api-dashboard/
     private const string DashboardService = "api@internal";
 
+    /// <summary>
+    /// Generates the run-mode file with the routes, middlewares, and dashboard router of a managed Traefik.
+    /// </summary>
     public static async Task<string> GenerateAsync(TraefikResource traefik, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
     {
         // Backend URLs and hosts are resolved from Traefik's point of view: containers by their name on the
