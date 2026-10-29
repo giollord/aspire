@@ -58,15 +58,27 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal int? HostHttpsPort { get; set; }
 
     /// <summary>
-    /// Gets the ACME (Let's Encrypt) certificate resolver, if one is configured.
+    /// Gets the ACME (Let's Encrypt) certificate resolvers, in the order they were added.
     /// </summary>
-    internal TraefikAcmeResolver? AcmeResolver { get; set; }
+    internal List<TraefikAcmeResolver> AcmeResolvers { get; } = [];
+
+    /// <summary>
+    /// Gets the resolver that routes and the <c>websecure</c> entry point use unless a route names another: the first
+    /// one added.
+    /// </summary>
+    internal TraefikAcmeResolver? DefaultAcmeResolver => AcmeResolvers.Count > 0 ? AcmeResolvers[0] : null;
+
+    /// <summary>
+    /// Gets the certificate domains of the <c>websecure</c> entry point, added with <c>WithTlsDomain</c>.
+    /// </summary>
+    internal List<TraefikTlsDomain> TlsDomains { get; } = [];
 
     /// <summary>
     /// Gets the ACME directory URL set with <c>WithAcmeCaServer</c>, if any.
     /// </summary>
     /// <remarks>
-    /// Kept apart from <see cref="AcmeResolver"/> so it doesn't depend on the order of the calls.
+    /// Kept apart from <see cref="AcmeResolvers"/> so it doesn't depend on the order of the calls. It applies to every
+    /// resolver.
     /// </remarks>
     internal ReferenceExpression? AcmeCaServer { get; set; }
 
@@ -133,7 +145,7 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// <summary>
     /// Gets a value indicating whether the <c>websecure</c> entry point exists on the managed container.
     /// </summary>
-    internal bool HasWebSecureEntryPoint => AcmeResolver is not null;
+    internal bool HasWebSecureEntryPoint => AcmeResolvers.Count > 0;
 
     TraefikRouteDefaults ITraefikRouteTarget.GetRouteDefaults(bool isPublishMode)
     {
@@ -153,7 +165,7 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
             // Let's Encrypt can't issue certificates for a local `aspire run`: the ACME server must reach the
             // machine on public ports 80/443 under a public DNS name. Run mode therefore still terminates TLS on
             // `websecure`, but with Traefik's built-in self-signed default certificate and no resolver.
-            var resolver = isPublishMode ? ReferenceExpression.Create($"{AcmeResolver!.Name}") : null;
+            var resolver = isPublishMode ? ReferenceExpression.Create($"{DefaultAcmeResolver!.Name}") : null;
             return new(ReferenceExpression.Create($"{WebSecureEntryPointName}"), Tls: true, resolver, Network: null, IsSecure: true);
         }
 

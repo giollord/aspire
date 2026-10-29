@@ -244,6 +244,37 @@ traefik.WithLetsEncrypt(email)
        .WithAcmeCaServer(caServer);
 ```
 
+### DNS-01 and wildcard certificates
+
+`WithDnsChallenge` proves control of the domains through a DNS provider's API instead. It works for hosts that the internet can't reach, and it is the only way to get a wildcard certificate, which `WithTlsDomain` requests:
+
+```csharp
+var token = builder.AddParameter("cloudflare-token", secret: true);
+
+traefik.WithLetsEncrypt(email)
+       .WithDnsChallenge("cloudflare", dns => dns.Credentials["CF_DNS_API_TOKEN"] = token)
+       .WithTlsDomain(ReferenceExpression.Create($"{domain}"), ReferenceExpression.Create($"*.{domain}"));
+```
+
+- The provider names and their credential variables are listed in the [lego documentation](https://go-acme.github.io/lego/dns/). The credentials become environment variables of Traefik when publishing; `aspire run` doesn't request certificates, so it doesn't ask for them.
+- `dns.Resolvers` sets the DNS servers used to check propagation (`1.1.1.1:53`), and `dns.DelayBeforeChecks` how long to wait first.
+- With TLS domains, the `websecure` entry point requests one certificate per domain at publish time, and routes whose host it covers use it.
+
+### Several resolvers
+
+Calling `WithLetsEncrypt` again with another `resolverName` adds a resolver. The first one is the default; a route chooses another with `CertResolver`:
+
+```csharp
+traefik.WithLetsEncrypt(email)                                                    // default: DNS-01 above
+       .WithLetsEncrypt(email, resolverName: "http", challenge: TraefikAcmeChallenge.Http);
+
+partner.WithTraefikRoute(traefik, route =>
+{
+    route.Host = ReferenceExpression.Create($"shop.example.org");
+    route.CertResolver = "http";
+});
+```
+
 ## Using a Traefik that already runs on the server
 
 When the deployment target already runs Traefik with the Docker provider, use the local container only for development:

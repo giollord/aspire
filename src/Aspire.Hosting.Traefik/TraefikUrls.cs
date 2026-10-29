@@ -26,9 +26,11 @@ internal static class TraefikUrls
         }
 
         var defaults = traefik.GetRouteDefaults(isPublishMode);
+        // A route's own resolver turns on TLS when published (see TraefikDockerLabels), but not in run mode, where no
+        // certificates are requested.
         var isSecure = options.EntryPoint is null
-            ? defaults.IsSecure
-            : string.Equals(options.EntryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal);
+            ? defaults.IsSecure || (isPublishMode && options.CertResolver is not null)
+            : string.Equals(options.EntryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal) || (isPublishMode && options.CertResolver is not null);
 
         var builder = new ReferenceExpressionBuilder();
         builder.AppendLiteral(isSecure ? "https://" : "http://");

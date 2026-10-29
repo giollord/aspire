@@ -64,20 +64,25 @@ internal static class TraefikStaticConfiguration
         // Checked in both modes so a misconfiguration shows up on `aspire run`, not only on the first deployment.
         if (traefik.AcmeCaServer is not null)
         {
-            if (traefik.AcmeResolver is not { } resolver)
+            if (traefik.AcmeResolvers.Count == 0)
             {
                 throw new InvalidOperationException($"Traefik resource '{traefik.Name}' sets an ACME CA server, but no certificate resolver is configured. Call WithLetsEncrypt.");
             }
 
-            if (resolver.Staging)
+            if (traefik.AcmeResolvers.FirstOrDefault(r => r.Staging) is { } staging)
             {
-                throw new InvalidOperationException($"Traefik resource '{traefik.Name}' sets both an ACME CA server and staging: true. Use one of them.");
+                throw new InvalidOperationException($"Traefik resource '{traefik.Name}' sets an ACME CA server, and its resolver '{staging.Name}' sets staging: true. Use one of them.");
             }
         }
 
-        if (isPublishMode && traefik.AcmeResolver is { } acme)
+        ValidateTlsDomains(traefik);
+
+        if (isPublishMode)
         {
-            AddAcmeResolver(acme, traefik.AcmeCaServer, args);
+            foreach (var acme in traefik.AcmeResolvers)
+            {
+                AddAcmeResolver(acme, traefik.AcmeCaServer, args);
+            }
         }
 
         if (!isPublishMode)
@@ -114,8 +119,13 @@ internal static class TraefikStaticConfiguration
             // the routes, run mode uses the default certificate and publish time the ACME resolver.
             // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
             args.Add(isPublishMode
-                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={traefik.AcmeResolver!.Name}"
+                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={traefik.DefaultAcmeResolver!.Name}"
                 : $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls=true");
+
+            if (isPublishMode)
+            {
+                AddTlsDomains(traefik, args);
+            }
         }
 
         AddEntryPointMiddlewares(traefik, args);
@@ -194,6 +204,40 @@ internal static class TraefikStaticConfiguration
         // the volume, so it gets mode 600; a bind-mounted file created by someone else would not.
         args.Add($"{prefix}.storage={TraefikResource.AcmeStorageDirectory}/acme.json");
 
+        if (acme.DnsChallenge is { } dns)
+        {
+            // The provider's credentials are environment variables of the Traefik container (see AddTraefik), which
+            // lego reads; only the provider name is static configuration.
+            args.Add($"{prefix}.dnschallenge.provider={dns.Provider}");
+
+            if (dns.Resolvers.Count > 0)
+            {
+                args.Add($"{prefix}.dnschallenge.resolvers={string.Join(",", dns.Resolvers)}");
+            }
+
+            if (dns.DelayBeforeChecks is { } delay)
+            {
+                // `propagation.delayBeforeChecks` replaced `delayBeforeCheck` in Traefik v3.3.
+                args.Add($"{prefix}.dnschallenge.propagation.delaybeforechecks={delay}");
+            }
+        }
+        else
+        {
+            AddChallenge(acme, prefix, args);
+        }
+
+        if (caServer is not null)
+        {
+            args.Add(ReferenceExpression.Create($"{prefix}.caserver={caServer}"));
+        }
+        else if (acme.Staging)
+        {
+            args.Add($"{prefix}.caserver={LetsEncryptStagingDirectory}");
+        }
+    }
+
+    private static void AddChallenge(TraefikAcmeResolver acme, string prefix, IList<object> args)
+    {
         switch (acme.Challenge)
         {
             case TraefikAcmeChallenge.TlsAlpn:
@@ -204,14 +248,57 @@ internal static class TraefikStaticConfiguration
                 args.Add($"{prefix}.httpchallenge.entrypoint={TraefikResource.WebEntryPointName}");
                 break;
         }
+    }
 
-        if (caServer is not null)
+    private static void ValidateTlsDomains(TraefikResource traefik)
+    {
+        // Checked in both modes, although the domains are only used at publish time, so a mistake shows up on
+        // `aspire run` already.
+        if (traefik.TlsDomains.Count == 0)
         {
-            args.Add(ReferenceExpression.Create($"{prefix}.caserver={caServer}"));
+            return;
         }
-        else if (acme.Staging)
+
+        if (traefik.DefaultAcmeResolver is not { } resolver)
         {
-            args.Add($"{prefix}.caserver={LetsEncryptStagingDirectory}");
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has TLS domains, but no certificate resolver is configured. Call WithLetsEncrypt.");
+        }
+
+        if (resolver.DnsChallenge is null && traefik.TlsDomains.Any(d => d.HasWildcard))
+        {
+            // https://letsencrypt.org/docs/challenge-types/#dns-01-challenge
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has a wildcard TLS domain, which Let's Encrypt only issues with the DNS-01 challenge. Call WithDnsChallenge for the resolver '{resolver.Name}'.");
+        }
+    }
+
+    private static void AddTlsDomains(TraefikResource traefik, IList<object> args)
+    {
+        // The default resolver of the entry point requests one certificate per domain, covering its SANs, instead of
+        // one per router host. That is how a wildcard certificate is requested.
+        // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
+        for (var i = 0; i < traefik.TlsDomains.Count; i++)
+        {
+            var domain = traefik.TlsDomains[i];
+            var prefix = FormattableString.Invariant($"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.domains[{i}]");
+
+            args.Add(ReferenceExpression.Create($"{prefix}.main={domain.Main}"));
+
+            if (domain.Sans.Count > 0)
+            {
+                var sans = new ReferenceExpressionBuilder();
+                sans.AppendLiteral($"{prefix}.sans=");
+                for (var j = 0; j < domain.Sans.Count; j++)
+                {
+                    if (j > 0)
+                    {
+                        sans.AppendLiteral(",");
+                    }
+
+                    sans.AppendValueProvider(domain.Sans[j]);
+                }
+
+                args.Add(sans.Build());
+            }
         }
     }
 

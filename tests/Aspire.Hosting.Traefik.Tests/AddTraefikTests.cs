@@ -153,7 +153,7 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
             .WithAcmeCaServer("https://acme.example.com/directory");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () => await ArgumentEvaluator.GetArgumentListAsync(traefik.Resource));
-        Assert.Equal("Traefik resource 'traefik' sets both an ACME CA server and staging: true. Use one of them.", exception.Message);
+        Assert.Equal("Traefik resource 'traefik' sets an ACME CA server, and its resolver 'letsencrypt' sets staging: true. Use one of them.", exception.Message);
     }
 
     [Theory]

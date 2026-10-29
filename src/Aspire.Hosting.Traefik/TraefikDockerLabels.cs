@@ -45,7 +45,12 @@ internal static class TraefikDockerLabels
             labels[$"{router}.priority"] = priority.ToString(CultureInfo.InvariantCulture);
         }
 
-        if (route.Options.EntryPoint is null)
+        if (route.Options.CertResolver is { } routeCertResolver)
+        {
+            labels[$"{router}.tls"] = "true";
+            labels[$"{router}.tls.certresolver"] = routeCertResolver;
+        }
+        else if (route.Options.EntryPoint is null)
         {
             if (defaults.Tls)
             {

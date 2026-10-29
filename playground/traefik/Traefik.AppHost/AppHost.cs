@@ -29,6 +29,20 @@ if (builder.Configuration.GetValue<bool>("Traefik:EnableHttps"))
     traefik
         .WithLetsEncrypt(builder.AddParameter("acme-email"))
         .WithHttpsRedirect();
+
+    // Optionally one wildcard certificate for *.<domain>, through the DNS-01 challenge, instead of one certificate per
+    // host. For example Traefik:DnsProvider=cloudflare and Traefik:DnsCredentialName=CF_DNS_API_TOKEN; the credential
+    // is only asked for when publishing.
+    if (builder.Configuration["Traefik:DnsProvider"] is { Length: > 0 } dnsProvider)
+    {
+        var dnsCredentialName = builder.Configuration["Traefik:DnsCredentialName"]
+            ?? throw new InvalidOperationException("Set Traefik:DnsCredentialName to the provider's credential variable.");
+        var dnsCredential = builder.AddParameter("dns-credential", secret: true);
+
+        traefik
+            .WithDnsChallenge(dnsProvider, dns => dns.Credentials[dnsCredentialName] = dnsCredential)
+            .WithTlsDomain(ReferenceExpression.Create($"{domain}"), ReferenceExpression.Create($"*.{domain}"));
+    }
 }
 
 // Middlewares shared by several routes: security headers and compression, applied as one chain.

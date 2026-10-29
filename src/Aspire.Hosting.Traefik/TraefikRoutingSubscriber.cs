@@ -104,6 +104,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
                 routerNames.Add(routerName, resource);
 
+                // An external Traefik's resolvers aren't known, but the managed one's are, in run mode too, so a typo
+                // shows up before the first deployment.
+                if (annotation.Options.CertResolver is { } certResolver &&
+                    annotation.Traefik.PublishExternal is null &&
+                    !annotation.Traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{annotation.Traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
+                }
+
                 var endpoint = ResolveEndpoint(resourceWithEndpoints, annotation.Options.EndpointName);
                 var middlewares = GetMiddlewares(resource, routerName, annotation, resourceMiddlewares);
                 var route = new TraefikRoute(annotation.Traefik, resourceWithEndpoints, routerName, endpoint, annotation.Options, middlewares);

@@ -94,6 +94,17 @@ public sealed class TraefikRouteOptions
     public string? RawRule { get; set; }
 
     /// <summary>
+    /// Gets or sets the certificate resolver of the route when published, instead of the default one: the first resolver
+    /// added with <c>WithLetsEncrypt</c>, or the one given to <c>PublishAsExternal</c>.
+    /// </summary>
+    /// <remarks>
+    /// Setting it enables TLS on the route at publish time, also on an entry point set with <see cref="EntryPoint"/>.
+    /// The managed Traefik must have a resolver with that name; for an external Traefik, the name isn't checked. In run
+    /// mode certificates aren't requested, so it has no effect.
+    /// </remarks>
+    public string? CertResolver { get; set; }
+
+    /// <summary>
     /// Gets or sets the router priority. When unset, Traefik uses the length of the rule, so more specific rules win.
     /// </summary>
     public int? Priority { get; set; }

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Resources.ComposeNodes;
@@ -12,7 +13,7 @@ namespace Aspire.Hosting;
 /// <summary>
 /// Provides extension methods for adding Traefik Proxy to the application model.
 /// </summary>
-public static class TraefikBuilderExtensions
+public static partial class TraefikBuilderExtensions
 {
     private const string DockerSocketPath = "/var/run/docker.sock";
 
@@ -76,6 +77,20 @@ public static class TraefikBuilderExtensions
             // The Docker provider discovers routed services through the Docker API. Read-only limits what the
             // proxy can do with the socket, but access to it is still powerful; see the README for alternatives.
             traefik.WithBindMount(DockerSocketPath, DockerSocketPath, isReadOnly: true);
+
+            // DNS provider credentials of DNS-01 resolvers. Only at publish time, because run mode doesn't request
+            // certificates, so `aspire run` doesn't ask for the secrets. lego reads them from the environment.
+            // https://go-acme.github.io/lego/dns/
+            traefik.WithEnvironment(context =>
+            {
+                foreach (var dns in resource.AcmeResolvers.Select(r => r.DnsChallenge).OfType<TraefikDnsChallenge>())
+                {
+                    foreach (var (name, parameter) in dns.Credentials)
+                    {
+                        context.EnvironmentVariables[name] = parameter;
+                    }
+                }
+            });
 
             builder.Eventing.Subscribe<BeforeStartEvent>((@event, _) =>
             {
@@ -479,6 +494,12 @@ public static class TraefikBuilderExtensions
     /// the routes request certificates from the resolver, and the certificates are stored in a volume.
     /// </para>
     /// <para>
+    /// Calling the method again with another <paramref name="resolverName"/> adds another resolver, for example one that
+    /// uses the DNS-01 challenge (<c>WithDnsChallenge</c>) for some hosts. The first resolver is the default; a route
+    /// uses another with <see cref="TraefikRouteOptions.CertResolver"/>. Calling it again with the same name replaces
+    /// that resolver's settings.
+    /// </para>
+    /// <para>
     /// Let's Encrypt can't issue certificates for a local run, because it must reach the machine on public ports
     /// 80 and 443 under a public DNS name. In run mode HTTPS still works on <c>websecure</c>, with Traefik's
     /// self-signed default certificate.
@@ -526,6 +547,175 @@ public static class TraefikBuilderExtensions
     }
 
     /// <summary>
+    /// Makes a certificate resolver prove control of the domains with the ACME DNS-01 challenge, through a DNS provider's
+    /// API.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="provider">The lego name of the DNS provider, for example <c>cloudflare</c>, <c>route53</c>, or <c>azuredns</c>.</param>
+    /// <param name="configure">Sets the provider's credentials and the other options of the challenge.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// DNS-01 works for hosts that the internet can't reach, and it is the only challenge that issues wildcard
+    /// certificates (see <c>WithTlsDomain</c>). Call <c>WithLetsEncrypt</c> for the resolver first.
+    /// </para>
+    /// <para>
+    /// See <see href="https://go-acme.github.io/lego/dns/"/> for the providers and their environment variables, and
+    /// <see href="https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#dnschallenge"/>.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// var token = builder.AddParameter("cloudflare-token", secret: true);
+    ///
+    /// var traefik = builder.AddTraefik("traefik")
+    ///     .WithLetsEncrypt("admin@example.com")
+    ///     .WithDnsChallenge("cloudflare", dns => dns.Credentials["CF_DNS_API_TOKEN"] = token)
+    ///     .WithTlsDomain("example.com", "*.example.com");
+    /// </code>
+    /// </example>
+    [AspireExportIgnore(Reason = "The options hold a dictionary of parameter builders, which polyglot AppHosts can't pass yet.")]
+    public static IResourceBuilder<TraefikResource> WithDnsChallenge(this IResourceBuilder<TraefikResource> builder, string provider, Action<TraefikDnsChallengeOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+
+        if (!DnsProviderRegex().IsMatch(provider))
+        {
+            throw new ArgumentException($"The DNS provider '{provider}' is invalid. Use the provider's lego name, for example 'cloudflare'.", nameof(provider));
+        }
+
+        var options = new TraefikDnsChallengeOptions();
+        configure?.Invoke(options);
+
+        var resource = builder.Resource;
+        var resolver = options.ResolverName is null
+            ? resource.DefaultAcmeResolver
+            : resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, options.ResolverName, StringComparison.OrdinalIgnoreCase));
+
+        if (resolver is null)
+        {
+            throw new InvalidOperationException(options.ResolverName is null
+                ? $"Traefik resource '{resource.Name}' has no certificate resolver for the DNS challenge. Call WithLetsEncrypt first."
+                : $"Traefik resource '{resource.Name}' has no certificate resolver named '{options.ResolverName}'. Call WithLetsEncrypt with that name first.");
+        }
+
+        foreach (var (name, parameter) in options.Credentials)
+        {
+            if (!EnvironmentVariableRegex().IsMatch(name))
+            {
+                throw new ArgumentException($"The DNS credential name '{name}' is invalid. Use the environment variable name from the lego documentation, for example 'CF_DNS_API_TOKEN'.", nameof(configure));
+            }
+
+            ArgumentNullException.ThrowIfNull(parameter, nameof(configure));
+        }
+
+        foreach (var server in options.Resolvers)
+        {
+            // lego expects `host:port`; without a port it fails only when the first certificate is requested.
+            if (string.IsNullOrWhiteSpace(server) || !server.Contains(':') || server.Contains(','))
+            {
+                throw new ArgumentException($"The DNS resolver '{server}' is invalid. Use host:port, for example '1.1.1.1:53'.", nameof(configure));
+            }
+        }
+
+        resolver.DnsChallenge = new TraefikDnsChallenge(
+            provider,
+            options.Credentials.ToDictionary(c => c.Key, c => c.Value.Resource, StringComparer.Ordinal),
+            [.. options.Resolvers],
+            options.DelayBeforeChecks is { } delay ? TraefikNames.ToDuration(delay, nameof(configure)) : null);
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, for example a
+    /// wildcard certificate.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="main">The main domain of the certificate, for example <c>example.com</c>.</param>
+    /// <param name="sans">The subject alternative names, for example <c>*.example.com</c>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without TLS domains, Traefik requests a certificate per router host. With them, the default resolver requests one
+    /// certificate per domain at publish time, and routers whose host it covers use it. A wildcard requires the DNS-01
+    /// challenge (<c>WithDnsChallenge</c>) on the default resolver.
+    /// </para>
+    /// <para>
+    /// The domains only apply to the managed Traefik at publish time; in run mode Traefik uses its self-signed
+    /// certificate. See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls"/>.
+    /// </para>
+    /// </remarks>
+    [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTlsDomain export, which accepts strings or reference expressions.")]
+    public static IResourceBuilder<TraefikResource> WithTlsDomain(this IResourceBuilder<TraefikResource> builder, string main, params string[] sans)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(main);
+        ArgumentNullException.ThrowIfNull(sans);
+
+        return builder.WithTlsDomain(
+            ReferenceExpression.Create($"{main}"),
+            [.. sans.Select(san =>
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(san, nameof(sans));
+                return ReferenceExpression.Create($"{san}");
+            })]);
+    }
+
+    /// <summary>
+    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, with names that
+    /// can reference parameters, for example <c>*.{domain}</c>.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="main">The main domain of the certificate.</param>
+    /// <param name="sans">The subject alternative names.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// See <see cref="WithTlsDomain(IResourceBuilder{TraefikResource}, string, string[])"/>.
+    /// </remarks>
+    [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTlsDomain export, which accepts strings or reference expressions.")]
+    public static IResourceBuilder<TraefikResource> WithTlsDomain(this IResourceBuilder<TraefikResource> builder, ReferenceExpression main, params ReferenceExpression[] sans)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(main);
+        ArgumentNullException.ThrowIfNull(sans);
+
+        foreach (var name in sans.Prepend(main))
+        {
+            ArgumentNullException.ThrowIfNull(name, nameof(sans));
+
+            // Static configuration splits list values on commas.
+            if (name.Format.Contains(','))
+            {
+                throw new ArgumentException($"The TLS domain '{name.ValueExpression}' contains ','.", nameof(sans));
+            }
+        }
+
+        builder.Resource.TlsDomains.Add(new TraefikTlsDomain(main, sans));
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point.
+    /// </summary>
+    [AspireExport("withTlsDomain")]
+    internal static IResourceBuilder<TraefikResource> WithTlsDomainPolyglot(
+        this IResourceBuilder<TraefikResource> builder,
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object main,
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object[]? sans = null)
+    {
+        return builder.WithTlsDomain(ToExpression(main, nameof(main)), [.. (sans ?? []).Select(san => ToExpression(san, nameof(sans)))]);
+
+        static ReferenceExpression ToExpression(object value, string parameterName) => value switch
+        {
+            string text => ReferenceExpression.Create($"{text}"),
+            ReferenceExpression expression => expression,
+            _ => throw new ArgumentException($"Unsupported type '{value?.GetType().Name}'. Expected a string or a reference expression.", parameterName),
+        };
+    }
+
+    /// <summary>
     /// Enables HTTPS with certificates issued by Let's Encrypt.
     /// </summary>
     [AspireExport("withLetsEncrypt")]
@@ -558,7 +748,17 @@ public static class TraefikBuilderExtensions
         var isPublishMode = builder.ApplicationBuilder.ExecutionContext.IsPublishMode;
         var hadWebSecure = resource.HasWebSecureEntryPoint;
 
-        resource.AcmeResolver = new TraefikAcmeResolver(resolverName, email, challenge, staging);
+        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
+        var resolver = resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, resolverName, StringComparison.OrdinalIgnoreCase));
+        if (resolver is null)
+        {
+            resolver = new TraefikAcmeResolver(resolverName, email);
+            resource.AcmeResolvers.Add(resolver);
+        }
+
+        resolver.Email = email;
+        resolver.Challenge = challenge;
+        resolver.Staging = staging;
 
         if (!hadWebSecure)
         {
@@ -804,4 +1004,11 @@ public static class TraefikBuilderExtensions
             _ => throw new ArgumentException($"Unsupported type '{value.GetType().Name}'. Expected a string or a reference expression.", parameterName),
         };
     }
+
+    // lego provider names, for example `cloudflare`, `route53`, `azuredns`, or `ovh`.
+    [GeneratedRegex("^[a-z0-9][a-z0-9.-]*$")]
+    private static partial Regex DnsProviderRegex();
+
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
+    private static partial Regex EnvironmentVariableRegex();
 }
