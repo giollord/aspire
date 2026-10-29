@@ -166,22 +166,22 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
         var traefik = builder.AddTraefik("traefik");
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.WithAcmeCaServer(caServer));
-        Assert.Equal("caServer", exception.ParamName);
+        Assert.Equal($"The ACME directory URL '{caServer}' must be an absolute HTTP or HTTPS URL. (Parameter 'caServer')", exception.Message);
     }
 
     [Theory]
-    [InlineData("web")]
-    [InlineData("websecure")]
-    [InlineData("traefik")]
-    [InlineData("bad.name")]
-    public void WithEntryPointRejectsReservedAndInvalidNames(string name)
+    [InlineData("web", "The entry point name 'web' is reserved by the Traefik integration. (Parameter 'name')")]
+    [InlineData("websecure", "The entry point name 'websecure' is reserved by the Traefik integration. (Parameter 'name')")]
+    [InlineData("traefik", "The entry point name 'traefik' is reserved by the Traefik integration. (Parameter 'name')")]
+    [InlineData("bad.name", "The entry point name 'bad.name' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'name')")]
+    public void WithEntryPointRejectsReservedAndInvalidNames(string name, string message)
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var traefik = builder.AddTraefik("traefik");
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.WithEntryPoint(name, targetPort: 9000));
-        Assert.Equal("name", exception.ParamName);
+        Assert.Equal(message, exception.Message);
     }
 
     [Fact]

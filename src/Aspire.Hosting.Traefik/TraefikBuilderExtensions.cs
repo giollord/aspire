@@ -19,7 +19,9 @@ namespace Aspire.Hosting;
 /// </summary>
 public static partial class TraefikBuilderExtensions
 {
-    // The endpoint of the socket proxy container that Traefik's Docker provider connects to.
+    /// <summary>
+    /// The endpoint of the socket proxy container that Traefik's Docker provider connects to.
+    /// </summary>
     internal const string SocketProxyEndpointName = "docker";
 
     private const string DockerSocketPath = "/var/run/docker.sock";
@@ -213,45 +215,6 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
-    /// Marks the port mappings of UDP entry points as UDP in the Docker Compose service of Traefik.
-    /// </summary>
-    /// <remarks>
-    /// The Docker Compose publisher writes every mapping without a protocol, such as <c>5353:5353</c>, which Docker reads
-    /// as TCP, so a UDP entry point would never receive a datagram. The UDP form is <c>5353:5353/udp</c>.
-    /// See <see href="https://docs.docker.com/reference/compose-file/services/#ports"/>.
-    /// </remarks>
-    private static void SetUdpPortProtocols(TraefikResource traefik, Service service)
-    {
-        foreach (var entryPoint in traefik.CustomEntryPoints.Where(e => e.IsUdp))
-        {
-            var target = entryPoint.TargetPort.ToString(CultureInfo.InvariantCulture);
-
-            // The publisher writes one string for equal mappings, so a TCP entry point on the same container port shares
-            // it. Such a mapping is kept for TCP and the UDP one is added next to it.
-            var sharedWithTcp = entryPoint.TargetPort is TraefikResource.WebTargetPort or TraefikResource.WebSecureTargetPort or TraefikResource.TraefikTargetPort
-                || traefik.CustomEntryPoints.Any(e => !e.IsUdp && e.TargetPort == entryPoint.TargetPort);
-
-            for (var i = 0; i < service.Ports.Count; i++)
-            {
-                var mapping = service.Ports[i];
-                if (mapping != target && !mapping.EndsWith($":{target}", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (sharedWithTcp)
-                {
-                    service.Ports.Insert(++i, $"{mapping}/udp");
-                }
-                else
-                {
-                    service.Ports[i] = $"{mapping}/udp";
-                }
-            }
-        }
-    }
-
-    /// <summary>
     /// Sets the host port of the <c>web</c> entry point instead of using a randomly assigned port in run mode or port 80
     /// at publish time.
     /// </summary>
@@ -327,10 +290,7 @@ public static partial class TraefikBuilderExtensions
             throw new ArgumentException($"The entry point name '{name}' is reserved by the Traefik integration.", nameof(name));
         }
 
-        if (!TraefikNames.IsValidName(name))
-        {
-            throw new ArgumentException($"The entry point name '{name}' is invalid. Use letters, digits, '-' and '_' only.", nameof(name));
-        }
+        TraefikNames.ThrowIfInvalidName(name, "entry point name", nameof(name));
 
         if (scheme is not ("tcp" or "http" or "https" or "udp"))
         {
@@ -413,24 +373,6 @@ public static partial class TraefikBuilderExtensions
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
 
         return builder;
-    }
-
-    private static List<TraefikMiddlewareResource> GetOwnMiddlewares(IResourceBuilder<TraefikResource> builder, IResourceBuilder<TraefikMiddlewareResource>[] middlewares, string parameterName)
-    {
-        var resources = new List<TraefikMiddlewareResource>(middlewares.Length);
-        foreach (var middleware in middlewares)
-        {
-            ArgumentNullException.ThrowIfNull(middleware, parameterName);
-
-            if (middleware.Resource.Parent != builder.Resource)
-            {
-                throw new ArgumentException($"The Traefik middleware '{middleware.Resource.Name}' belongs to '{middleware.Resource.Parent.Name}', not '{builder.Resource.Name}'.", parameterName);
-            }
-
-            resources.Add(middleware.Resource);
-        }
-
-        return resources;
     }
 
     /// <summary>
@@ -548,12 +490,12 @@ public static partial class TraefikBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        var resource = builder.Resource;
         if (!builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
         {
             return builder;
         }
 
+        var resource = builder.Resource;
         if (resource.DockerSocketProxy is { } existing)
         {
             if (configure is not null)
@@ -598,19 +540,6 @@ public static partial class TraefikBuilderExtensions
         return builder;
     }
 
-    private static void PinDefaultSocketProxyImage(ContainerResource proxy)
-    {
-        // Pin only the image this package chose. WithImage keeps an existing digest, so pinning before `configure` would
-        // pin a mirror or replacement image to the digest of a different image.
-        if (proxy.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault() is { } image &&
-            image.Registry == TraefikContainerImageTags.SocketProxyRegistry &&
-            image.Image == TraefikContainerImageTags.SocketProxyImage &&
-            image.Tag == TraefikContainerImageTags.SocketProxyTag)
-        {
-            image.SHA256 ??= TraefikContainerImageTags.SocketProxySha256;
-        }
-    }
-
     /// <summary>
     /// Uses a Traefik that already runs on the deployment target instead of deploying this container at publish time.
     /// </summary>
@@ -647,6 +576,7 @@ public static partial class TraefikBuilderExtensions
     public static IResourceBuilder<TraefikResource> PublishAsExternal(this IResourceBuilder<TraefikResource> builder, string network, string entryPoint = TraefikResource.WebSecureEntryPointName, string? certResolver = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(network);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
 
         if (certResolver is not null)
@@ -718,6 +648,31 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
+    /// Gets the resources of middlewares passed to a method of <paramref name="builder"/>, which must belong to it.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="middlewares">The middlewares.</param>
+    /// <param name="parameterName">The parameter the middlewares were passed in, for the exceptions.</param>
+    /// <returns>The middleware resources, in the given order.</returns>
+    internal static List<TraefikMiddlewareResource> GetOwnMiddlewares(IResourceBuilder<TraefikResource> builder, IResourceBuilder<TraefikMiddlewareResource>[] middlewares, string parameterName)
+    {
+        var resources = new List<TraefikMiddlewareResource>(middlewares.Length);
+        foreach (var middleware in middlewares)
+        {
+            ArgumentNullException.ThrowIfNull(middleware, parameterName);
+
+            if (middleware.Resource.Parent != builder.Resource)
+            {
+                throw new ArgumentException($"The Traefik middleware '{middleware.Resource.Name}' belongs to '{middleware.Resource.Parent.Name}', not '{builder.Resource.Name}'.", parameterName);
+            }
+
+            resources.Add(middleware.Resource);
+        }
+
+        return resources;
+    }
+
+    /// <summary>
     /// Uses a Traefik that already runs on the deployment target instead of deploying this container at publish time.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>
@@ -749,6 +704,58 @@ public static partial class TraefikBuilderExtensions
             ReferenceExpression expression => expression,
             _ => throw new ArgumentException($"Unsupported type '{value.GetType().Name}'. Expected a string or a reference expression.", parameterName),
         };
+    }
+
+    /// <summary>
+    /// Marks the port mappings of UDP entry points as UDP in the Docker Compose service of Traefik.
+    /// </summary>
+    /// <remarks>
+    /// The Docker Compose publisher writes every mapping without a protocol, such as <c>5353:5353</c>, which Docker reads
+    /// as TCP, so a UDP entry point would never receive a datagram. The UDP form is <c>5353:5353/udp</c>.
+    /// See <see href="https://docs.docker.com/reference/compose-file/services/#ports"/>.
+    /// </remarks>
+    private static void SetUdpPortProtocols(TraefikResource traefik, Service service)
+    {
+        foreach (var entryPoint in traefik.CustomEntryPoints.Where(e => e.IsUdp))
+        {
+            var target = entryPoint.TargetPort.ToString(CultureInfo.InvariantCulture);
+
+            // The publisher writes one string for equal mappings, so a TCP entry point on the same container port shares
+            // it. Such a mapping is kept for TCP and the UDP one is added next to it.
+            var sharedWithTcp = entryPoint.TargetPort is TraefikResource.WebTargetPort or TraefikResource.WebSecureTargetPort or TraefikResource.TraefikTargetPort
+                || traefik.CustomEntryPoints.Any(e => !e.IsUdp && e.TargetPort == entryPoint.TargetPort);
+
+            for (var i = 0; i < service.Ports.Count; i++)
+            {
+                var mapping = service.Ports[i];
+                if (mapping != target && !mapping.EndsWith($":{target}", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (sharedWithTcp)
+                {
+                    service.Ports.Insert(++i, $"{mapping}/udp");
+                }
+                else
+                {
+                    service.Ports[i] = $"{mapping}/udp";
+                }
+            }
+        }
+    }
+
+    private static void PinDefaultSocketProxyImage(ContainerResource proxy)
+    {
+        // Pin only the image this package chose. WithImage keeps an existing digest, so pinning before `configure` would
+        // pin a mirror or replacement image to the digest of a different image.
+        if (proxy.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault() is { } image &&
+            image.Registry == TraefikContainerImageTags.SocketProxyRegistry &&
+            image.Image == TraefikContainerImageTags.SocketProxyImage &&
+            image.Tag == TraefikContainerImageTags.SocketProxyTag)
+        {
+            image.SHA256 ??= TraefikContainerImageTags.SocketProxySha256;
+        }
     }
 
     // A status code or a range, for example `404` or `500-599`, as Traefik's access log filter reads them.

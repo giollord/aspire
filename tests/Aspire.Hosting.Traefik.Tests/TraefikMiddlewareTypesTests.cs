@@ -139,13 +139,14 @@ public class TraefikMiddlewareTypesTests(ITestOutputHelper testOutputHelper)
             route.Host = ReferenceExpression.Create($"api.dev.localhost");
             route.RawRule = "Host(`api.dev.localhost`)";
         }));
-        Assert.Equal("configure", exception.ParamName);
+        Assert.Equal("RawRule can't be combined with other matchers. Write the whole rule in it. (Parameter 'configure')", exception.Message);
     }
 
     [Fact]
     public void RuleValuesWithBackticksThrow()
     {
-        Assert.Throws<ArgumentException>(() => TraefikRule.Header("X-Test", "a`b"));
+        var exception = Assert.Throws<ArgumentException>(() => TraefikRule.Header("X-Test", "a`b"));
+        Assert.Equal("The value 'a`b' of the Header matcher can't contain '`'.", exception.Message);
     }
 
     [Fact]
@@ -195,7 +196,7 @@ public class TraefikMiddlewareTypesTests(ITestOutputHelper testOutputHelper)
         var compress = builder.AddTraefik("other").AddCompress("compress");
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.AddChain("defaults", compress));
-        Assert.Equal("middlewares", exception.ParamName);
+        Assert.Equal("The Traefik middleware 'compress' belongs to 'other', not 'traefik'. (Parameter 'middlewares')", exception.Message);
     }
 
     [Fact]
@@ -211,15 +212,15 @@ public class TraefikMiddlewareTypesTests(ITestOutputHelper testOutputHelper)
     }
 
     [Theory]
-    [InlineData("api")]
-    [InlineData("")]
-    public void PathMiddlewaresRejectRelativeOrEmptyPaths(string path)
+    [InlineData("api", "The path 'api' must start with '/'. (Parameter 'prefixes')")]
+    [InlineData("", "At least one value is required, and values can't be empty. (Parameter 'prefixes')")]
+    public void PathMiddlewaresRejectRelativeOrEmptyPaths(string path, string message)
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
         var traefik = builder.AddTraefik("traefik");
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.AddStripPrefix("strip", path));
-        Assert.Equal("prefixes", exception.ParamName);
+        Assert.Equal(message, exception.Message);
     }
 }

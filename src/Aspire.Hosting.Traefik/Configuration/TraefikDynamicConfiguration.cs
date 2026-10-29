@@ -36,14 +36,27 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal static class TraefikDynamicConfiguration
 {
-    internal const string FileName = "aspire.yml";
+    /// <summary>
+    /// The name of the generated routes file in Traefik's dynamic configuration directory.
+    /// </summary>
+    public const string FileName = "aspire.yml";
 
-    internal const string TlsFileName = "aspire-tls.yml";
+    /// <summary>
+    /// The name of the run-mode file that sets Traefik's default certificate (see <see cref="TlsFileContent"/>).
+    /// </summary>
+    public const string TlsFileName = "aspire-tls.yml";
 
-    // The container paths of the HTTPS certificate from Aspire and its key, which TlsFileContent reads.
-    internal const string TlsCertificateVariable = "ASPIRE_TRAEFIK_TLS_CERTIFICATE";
+    /// <summary>
+    /// The environment variable that holds the container path of the HTTPS certificate from Aspire, which
+    /// <see cref="TlsFileContent"/> reads.
+    /// </summary>
+    public const string TlsCertificateVariable = "ASPIRE_TRAEFIK_TLS_CERTIFICATE";
 
-    internal const string TlsKeyVariable = "ASPIRE_TRAEFIK_TLS_KEY";
+    /// <summary>
+    /// The environment variable that holds the container path of the certificate's private key, which
+    /// <see cref="TlsFileContent"/> reads.
+    /// </summary>
+    public const string TlsKeyVariable = "ASPIRE_TRAEFIK_TLS_KEY";
 
     /// <summary>
     /// The run-mode file that makes the HTTPS certificate from Aspire Traefik's default certificate, which every TLS router
@@ -56,7 +69,7 @@ internal static class TraefikDynamicConfiguration
     /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/providers/others/file/#go-templating"/>
     /// and <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/tls/tls-certificates/#default-certificate"/>.
     /// </remarks>
-    internal const string TlsFileContent =
+    public const string TlsFileContent =
         $$$"""
         {{- if env "{{{TlsCertificateVariable}}}" }}
         tls:
@@ -76,6 +89,10 @@ internal static class TraefikDynamicConfiguration
     /// <summary>
     /// Generates the run-mode file with the routes, middlewares, and dashboard router of a managed Traefik.
     /// </summary>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <param name="executionContext">The execution context of the run, which endpoints are resolved in.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The YAML content of <see cref="FileName"/>.</returns>
     public static async Task<string> GenerateAsync(TraefikResource traefik, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
     {
         // Backend URLs and hosts are resolved from Traefik's point of view: containers by their name on the
@@ -193,6 +210,7 @@ internal static class TraefikDynamicConfiguration
     /// Generates the dynamic configuration of a managed Traefik at publish time: its entry-point middlewares, the
     /// dashboard router, and the middlewares they use.
     /// </summary>
+    /// <returns>The YAML content of the Docker Compose config.</returns>
     /// <remarks>
     /// The file becomes a Docker Compose config, whose content Docker Compose interpolates like the rest of the file:
     /// <code>
@@ -269,7 +287,9 @@ internal static class TraefikDynamicConfiguration
     /// Gets the middlewares that a managed Traefik's own file has to define at publish time: the entry-point and
     /// dashboard middlewares, and the members of the chains among them.
     /// </summary>
-    internal static List<TraefikMiddlewareResource> GetPublishMiddlewares(TraefikResource traefik) =>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <returns>The middlewares, including the members of chains, each once.</returns>
+    public static List<TraefikMiddlewareResource> GetPublishMiddlewares(TraefikResource traefik) =>
         traefik.EntryPointMiddlewares.Values.SelectMany(m => m)
             .Concat(traefik.DashboardMiddlewares)
             .SelectMany(m => m.WithReferences())

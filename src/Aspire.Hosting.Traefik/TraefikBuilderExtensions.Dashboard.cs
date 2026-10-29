@@ -72,6 +72,7 @@ public static partial class TraefikBuilderExtensions
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withDashboardRoute export, which accepts a string or a reference expression.")]
     public static IResourceBuilder<TraefikResource> WithDashboard(this IResourceBuilder<TraefikResource> builder, string host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
         return builder.WithDashboard(ReferenceExpression.Create($"{host}"), middlewares);

@@ -77,6 +77,7 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     /// <summary>
     /// Gets this middleware followed by every middleware it refers to, directly or through other middlewares.
     /// </summary>
+    /// <returns>This middleware first, then the ones it refers to, depth first. A middleware reached twice is returned twice.</returns>
     internal IEnumerable<TraefikMiddlewareResource> WithReferences()
     {
         yield return this;

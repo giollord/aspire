@@ -51,20 +51,15 @@ public static partial class TraefikMiddlewareExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(type);
 
-        if (!TraefikNames.IsValidName(name))
-        {
-            throw new ArgumentException($"The middleware name '{name}' is invalid. Use letters, digits, '-' and '_' only.", nameof(name));
-        }
+        TraefikNames.ThrowIfInvalidName(name, "middleware name", nameof(name));
 
         if (!MiddlewareTypeRegex().IsMatch(type))
         {
             throw new ArgumentException($"The middleware type '{type}' is invalid. Use the type name from the Traefik documentation, for example 'stripPrefix'.", nameof(type));
         }
 
-        var middleware = new TraefikMiddlewareResource(name, type, builder.Resource);
-        builder.Resource.Middlewares.Add(middleware);
-
-        return builder.ApplicationBuilder.AddResource(middleware)
+        // Added to the model first: AddResource throws for a duplicate name, which must not leave the middleware on Traefik.
+        var middleware = builder.ApplicationBuilder.AddResource(new TraefikMiddlewareResource(name, type, builder.Resource))
             .WithIconName("Filter")
             .ExcludeFromManifest()
             // Shown under Traefik in the dashboard so it is visible which middlewares exist. Nothing runs, so the
@@ -75,6 +70,10 @@ public static partial class TraefikMiddlewareExtensions
                 State = KnownResourceStates.Active,
                 Properties = [new("traefik.middleware.type", type)],
             });
+
+        builder.Resource.Middlewares.Add(middleware.Resource);
+
+        return middleware;
     }
 
     /// <summary>
@@ -88,12 +87,8 @@ public static partial class TraefikMiddlewareExtensions
     /// Setting the same option again replaces the value. Option names are case-insensitive, as in Traefik.
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
-    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, string value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-
-        return SetOption(builder, path, value);
-    }
+    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, string value) =>
+        SetOption(builder, path, value, nameof(value));
 
     /// <inheritdoc cref="WithOption(IResourceBuilder{TraefikMiddlewareResource}, string, string)"/>
     /// <remarks>
@@ -101,34 +96,26 @@ public static partial class TraefikMiddlewareExtensions
     /// <c>${VAR}</c> placeholders in the generated <c>.env</c> file.
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
-    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, ReferenceExpression value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-
-        return SetOption(builder, path, value);
-    }
+    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, ReferenceExpression value) =>
+        SetOption(builder, path, value, nameof(value));
 
     /// <inheritdoc cref="WithOption(IResourceBuilder{TraefikMiddlewareResource}, string, string)"/>
     /// <remarks>
     /// At publish time the parameter becomes a <c>${VAR}</c> placeholder in the generated <c>.env</c> file.
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
-    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IResourceBuilder<ParameterResource> value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-
-        return SetOption(builder, path, ReferenceExpression.Create($"{value}"));
-    }
+    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IResourceBuilder<ParameterResource> value) =>
+        SetOption(builder, path, value is null ? null : ReferenceExpression.Create($"{value}"), nameof(value));
 
     /// <inheritdoc cref="WithOption(IResourceBuilder{TraefikMiddlewareResource}, string, string)"/>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
     public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, bool value) =>
-        SetOption(builder, path, value);
+        SetOption(builder, path, value, nameof(value));
 
     /// <inheritdoc cref="WithOption(IResourceBuilder{TraefikMiddlewareResource}, string, string)"/>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
     public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, long value) =>
-        SetOption(builder, path, value);
+        SetOption(builder, path, value, nameof(value));
 
     /// <summary>
     /// Sets a list option of a Traefik middleware, for example the <c>prefixes</c> of <c>stripPrefix</c>.
@@ -141,20 +128,51 @@ public static partial class TraefikMiddlewareExtensions
     /// At publish time the items are joined with commas in a Docker label, so a literal item can't contain a comma.
     /// </remarks>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
-    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<string> values)
-    {
-        ArgumentNullException.ThrowIfNull(values);
-
-        return SetOption(builder, path, values.Select(object (v) => v ?? throw new ArgumentException("A list item is null.", nameof(values))).ToArray());
-    }
+    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<string> values) =>
+        SetListOption(builder, path, values, nameof(values));
 
     /// <inheritdoc cref="WithOption(IResourceBuilder{TraefikMiddlewareResource}, string, IEnumerable{string})"/>
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withOption export, which accepts every supported value type.")]
-    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<ReferenceExpression> values)
-    {
-        ArgumentNullException.ThrowIfNull(values);
+    public static IResourceBuilder<TraefikMiddlewareResource> WithOption(this IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<ReferenceExpression> values) =>
+        SetListOption(builder, path, values, nameof(values));
 
-        return SetOption(builder, path, values.Select(object (v) => v ?? throw new ArgumentException("A list item is null.", nameof(values))).ToArray());
+    /// <summary>
+    /// Applies Traefik middlewares to every route of this resource that goes through the middlewares' Traefik.
+    /// </summary>
+    /// <typeparam name="T">The type of the routed resource.</typeparam>
+    /// <param name="builder">The builder of the routed resource.</param>
+    /// <param name="middlewares">The middlewares, in the order Traefik runs them.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The middlewares also apply to routes added after this call. They run before the middlewares of the individual
+    /// routes (<see cref="TraefikRouteOptions.Middlewares"/>), so authentication and security headers see the request as
+    /// the client sent it, before any path rewrite.
+    /// </para>
+    /// <para>
+    /// The resource must have at least one route through each middleware's Traefik.
+    /// </para>
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithTraefikMiddleware<T>(this IResourceBuilder<T> builder, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
+        where T : IResourceWithEndpoints
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(middlewares);
+
+        foreach (var middleware in middlewares)
+        {
+            ArgumentNullException.ThrowIfNull(middleware, nameof(middlewares));
+        }
+
+        builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
+
+        foreach (var middleware in middlewares)
+        {
+            builder.WithAnnotation(new TraefikMiddlewareAnnotation(middleware.Resource), ResourceAnnotationMutationBehavior.Append);
+        }
+
+        return builder;
     }
 
     /// <summary>
@@ -181,53 +199,33 @@ public static partial class TraefikMiddlewareExtensions
             bool flag => builder.WithOption(path, flag),
             long number => builder.WithOption(path, number),
             string[] list => builder.WithOption(path, list),
-            _ => throw new ArgumentException($"Unsupported option value type '{value?.GetType().Name}'.", nameof(value)),
+            _ => throw new ArgumentException($"Unsupported type '{value?.GetType().Name}'. Expected a string, a reference expression, a parameter, a boolean, a number, or a list of strings.", nameof(value)),
         };
     }
 
-    /// <summary>
-    /// Applies Traefik middlewares to every route of this resource that goes through the middlewares' Traefik.
-    /// </summary>
-    /// <typeparam name="T">The type of the routed resource.</typeparam>
-    /// <param name="builder">The builder of the routed resource.</param>
-    /// <param name="middlewares">The middlewares, in the order Traefik runs them.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// <para>
-    /// The middlewares also apply to routes added after this call. They run before the middlewares of the individual
-    /// routes (<see cref="TraefikRouteOptions.Middlewares"/>), so authentication and security headers see the request as
-    /// the client sent it, before any path rewrite.
-    /// </para>
-    /// <para>
-    /// The resource must have at least one route through each middleware's Traefik.
-    /// </para>
-    /// </remarks>
-    [AspireExport]
-    public static IResourceBuilder<T> WithTraefikMiddleware<T>(this IResourceBuilder<T> builder, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
-        where T : IResourceWithEndpoints
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentNullException.ThrowIfNull(middlewares);
-
-        builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
-
-        foreach (var middleware in middlewares)
-        {
-            ArgumentNullException.ThrowIfNull(middleware, nameof(middlewares));
-            builder.WithAnnotation(new TraefikMiddlewareAnnotation(middleware.Resource), ResourceAnnotationMutationBehavior.Append);
-        }
-
-        return builder;
-    }
-
-    private static IResourceBuilder<TraefikMiddlewareResource> SetOption(IResourceBuilder<TraefikMiddlewareResource> builder, string path, object value)
+    private static IResourceBuilder<TraefikMiddlewareResource> SetOption(IResourceBuilder<TraefikMiddlewareResource> builder, string path, object? value, string valueParameterName)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(value, valueParameterName);
 
         builder.Resource.Options.Set(path, value);
 
         return builder;
+    }
+
+    private static IResourceBuilder<TraefikMiddlewareResource> SetListOption<T>(IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<T>? values, string valuesParameterName)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(values, valuesParameterName);
+
+        object[] items = [.. values];
+        if (items.Any(item => item is null))
+        {
+            throw new ArgumentException("A list item is null.", valuesParameterName);
+        }
+
+        return SetOption(builder, path, items, valuesParameterName);
     }
 
     // Traefik's middleware types are camelCase identifiers, for example `stripPrefixRegex` or `inFlightReq`.

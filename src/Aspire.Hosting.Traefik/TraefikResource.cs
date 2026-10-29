@@ -36,14 +36,35 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// </summary>
     public const string WebSecureEntryPointName = "websecure";
 
-    // The entry point of Traefik's API, dashboard, and ping endpoint. It isn't meant for routes, so it stays internal.
+    /// <summary>
+    /// The entry point of Traefik's API, dashboard, and ping endpoint. It isn't meant for routes, so it stays internal.
+    /// </summary>
     internal const string TraefikEntryPointName = "traefik";
 
+    /// <summary>
+    /// The container port of the <c>web</c> entry point.
+    /// </summary>
     internal const int WebTargetPort = 80;
+
+    /// <summary>
+    /// The container port of the <c>websecure</c> entry point.
+    /// </summary>
     internal const int WebSecureTargetPort = 443;
+
+    /// <summary>
+    /// The container port of the <c>traefik</c> entry point.
+    /// </summary>
     internal const int TraefikTargetPort = 8080;
 
+    /// <summary>
+    /// The directory inside the container that Traefik's file provider reads.
+    /// </summary>
     internal const string DynamicConfigurationDirectory = "/etc/traefik/dynamic";
+
+    /// <summary>
+    /// The directory inside the container that holds the ACME certificate storage (<c>acme.json</c>), a volume at
+    /// publish time.
+    /// </summary>
     internal const string AcmeStorageDirectory = "/letsencrypt";
 
     private EndpointReference? _webEndpoint;
@@ -54,9 +75,15 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     public EndpointReference WebEndpoint => _webEndpoint ??= new(this, WebEntryPointName);
 
     /// <summary>
-    /// Gets a value indicating whether the Traefik dashboard and API are enabled.
+    /// Gets the custom entry points added with <c>WithEntryPoint</c>.
     /// </summary>
-    internal bool DashboardEnabled { get; set; }
+    internal List<TraefikEntryPoint> CustomEntryPoints { get; } = [];
+
+    /// <summary>
+    /// Gets the HTTPS host port requested with <c>WithHostHttpsPort</c>, applied when the <c>websecure</c>
+    /// entry point is created.
+    /// </summary>
+    internal int? HostHttpsPort { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether requests to the <c>web</c> entry point are redirected to <c>websecure</c>.
@@ -64,10 +91,10 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal bool HttpsRedirectEnabled { get; set; }
 
     /// <summary>
-    /// Gets the HTTPS host port requested with <c>WithHostHttpsPort</c>, applied when the <c>websecure</c>
-    /// entry point is created.
+    /// Gets the middlewares that apply to every router on an entry point, by entry point name, added with
+    /// <c>WithEntryPointMiddleware</c>.
     /// </summary>
-    internal int? HostHttpsPort { get; set; }
+    internal OrderedDictionary<string, List<TraefikMiddlewareResource>> EntryPointMiddlewares { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Gets the ACME (Let's Encrypt) certificate resolvers, in the order they were added.
@@ -79,6 +106,11 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// one added.
     /// </summary>
     internal TraefikAcmeResolver? DefaultAcmeResolver => AcmeResolvers.Count > 0 ? AcmeResolvers[0] : null;
+
+    /// <summary>
+    /// Gets a value indicating whether the <c>websecure</c> entry point exists on the managed container.
+    /// </summary>
+    internal bool HasWebSecureEntryPoint => AcmeResolvers.Count > 0;
 
     /// <summary>
     /// Gets the certificate domains of the <c>websecure</c> entry point, added with <c>WithTlsDomain</c>.
@@ -95,15 +127,41 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal ReferenceExpression? AcmeCaServer { get; set; }
 
     /// <summary>
-    /// Gets the settings of the external Traefik used at publish time, if one is configured.
+    /// Gets the middlewares added with <c>AddMiddleware</c> and the other middleware methods.
     /// </summary>
-    internal TraefikExternalSettings? PublishExternal { get; set; }
+    internal List<TraefikMiddlewareResource> Middlewares { get; } = [];
 
     /// <summary>
-    /// Gets the OTLP gRPC endpoint of the Docker Compose environment's dashboard that Traefik sends telemetry to at
-    /// publish time, if that dashboard is enabled.
+    /// Gets the routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/> before the
+    /// application starts or publishes.
     /// </summary>
-    internal EndpointReference? PublishOtlpEndpoint { get; set; }
+    internal List<TraefikRoute> Routes { get; } = [];
+
+    /// <summary>
+    /// Gets the TCP and UDP routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/>, like
+    /// <see cref="Routes"/>.
+    /// </summary>
+    internal List<TraefikTransportRoute> TransportRoutes { get; } = [];
+
+    /// <summary>
+    /// Gets a value indicating whether the Traefik dashboard and API are enabled.
+    /// </summary>
+    internal bool DashboardEnabled { get; set; }
+
+    /// <summary>
+    /// Gets the host the dashboard is routed on with <c>WithDashboard(host, middlewares)</c>, if any.
+    /// </summary>
+    internal ReferenceExpression? DashboardHost { get; set; }
+
+    /// <summary>
+    /// Gets the middlewares that protect the dashboard router.
+    /// </summary>
+    internal List<TraefikMiddlewareResource> DashboardMiddlewares { get; } = [];
+
+    /// <summary>
+    /// Gets the name of the router that serves the dashboard on <see cref="DashboardHost"/>.
+    /// </summary>
+    internal string DashboardRouterName => $"{Name}-dashboard";
 
     /// <summary>
     /// Gets the level of Traefik's logs set with <c>WithLogLevel</c>, if any.
@@ -122,35 +180,15 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     internal ContainerResource? DockerSocketProxy { get; set; }
 
     /// <summary>
-    /// Gets the custom entry points added with <c>WithEntryPoint</c>.
+    /// Gets the settings of the external Traefik used at publish time, if one is configured.
     /// </summary>
-    internal List<TraefikEntryPoint> CustomEntryPoints { get; } = [];
+    internal TraefikExternalSettings? PublishExternal { get; set; }
 
     /// <summary>
-    /// Gets the middlewares added with <c>AddMiddleware</c> and the other middleware methods.
+    /// Gets the OTLP gRPC endpoint of the Docker Compose environment's dashboard that Traefik sends telemetry to at
+    /// publish time, if that dashboard is enabled.
     /// </summary>
-    internal List<TraefikMiddlewareResource> Middlewares { get; } = [];
-
-    /// <summary>
-    /// Gets the middlewares that apply to every router on an entry point, by entry point name, added with
-    /// <c>WithEntryPointMiddleware</c>.
-    /// </summary>
-    internal OrderedDictionary<string, List<TraefikMiddlewareResource>> EntryPointMiddlewares { get; } = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Gets the host the dashboard is routed on with <c>WithDashboard(host, middlewares)</c>, if any.
-    /// </summary>
-    internal ReferenceExpression? DashboardHost { get; set; }
-
-    /// <summary>
-    /// Gets the middlewares that protect the dashboard router.
-    /// </summary>
-    internal List<TraefikMiddlewareResource> DashboardMiddlewares { get; } = [];
-
-    /// <summary>
-    /// Gets the name of the router that serves the dashboard on <see cref="DashboardHost"/>.
-    /// </summary>
-    internal string DashboardRouterName => $"{Name}-dashboard";
+    internal EndpointReference? PublishOtlpEndpoint { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether the managed container reads a dynamic configuration file at publish time. Routes
@@ -163,23 +201,6 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// file is generated. See <see cref="TraefikDynamicConfiguration.GeneratePublish"/>.
     /// </summary>
     internal TraefikPublishFileConfiguration? PublishFileConfiguration { get; set; }
-
-    /// <summary>
-    /// Gets the routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/> before the
-    /// application starts or publishes.
-    /// </summary>
-    internal List<TraefikRoute> Routes { get; } = [];
-
-    /// <summary>
-    /// Gets the TCP and UDP routes that target this Traefik. Populated by <see cref="TraefikRoutingSubscriber"/>, like
-    /// <see cref="Routes"/>.
-    /// </summary>
-    internal List<TraefikTransportRoute> TransportRoutes { get; } = [];
-
-    /// <summary>
-    /// Gets a value indicating whether the <c>websecure</c> entry point exists on the managed container.
-    /// </summary>
-    internal bool HasWebSecureEntryPoint => AcmeResolvers.Count > 0;
 
     TraefikRouteDefaults ITraefikRouteTarget.GetRouteDefaults(bool isPublishMode)
     {
@@ -194,16 +215,30 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
             return new(external.EntryPoint, Tls: external.CertResolver is not null, external.CertResolver, external.Network, secure);
         }
 
-        if (HasWebSecureEntryPoint)
+        // The `websecure` entry point exists exactly when a resolver does (see HasWebSecureEntryPoint).
+        if (DefaultAcmeResolver is { } defaultResolver)
         {
             // Let's Encrypt can't issue certificates for a local `aspire run`: the ACME server must reach the
             // machine on public ports 80/443 under a public DNS name. Run mode therefore still terminates TLS on
             // `websecure`, but with the Aspire HTTPS certificate (the developer certificate) as Traefik's default
             // certificate and no resolver; see TraefikDynamicConfiguration.TlsFileContent.
-            var resolver = isPublishMode ? ReferenceExpression.Create($"{DefaultAcmeResolver!.Name}") : null;
+            var resolver = isPublishMode ? ReferenceExpression.Create($"{defaultResolver.Name}") : null;
             return new(ReferenceExpression.Create($"{WebSecureEntryPointName}"), Tls: true, resolver, Network: null, IsSecure: true);
         }
 
         return new(ReferenceExpression.Create($"{WebEntryPointName}"), Tls: false, CertResolver: null, Network: null, IsSecure: false);
     }
+
+    /// <summary>
+    /// Gets a value indicating whether the managed container has an entry point: <c>web</c>, <c>websecure</c> once TLS is
+    /// configured, or one added with <c>WithEntryPoint</c>.
+    /// </summary>
+    /// <param name="name">The entry point name.</param>
+    /// <returns><see langword="true"/> when the entry point exists; otherwise, <see langword="false"/>.</returns>
+    internal bool HasEntryPoint(string name) => name switch
+    {
+        WebEntryPointName => true,
+        WebSecureEntryPointName => HasWebSecureEntryPoint,
+        _ => CustomEntryPoints.Any(e => e.Name == name),
+    };
 }

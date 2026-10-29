@@ -131,7 +131,7 @@ public class TraefikCertificateTests(ITestOutputHelper testOutputHelper)
         using var app = builder.Build();
 
         var exception = Assert.Throws<InvalidOperationException>(() => TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false));
-        Assert.Equal("The Traefik route 'api' of resource 'api' uses the certificate resolver 'dns', which 'traefik' doesn't have. Add it with WithLetsEncrypt.", exception.Message);
+        Assert.Equal("The Traefik HTTP route 'api' of resource 'api' uses the certificate resolver 'dns', which 'traefik' doesn't have. Add it with WithLetsEncrypt.", exception.Message);
     }
 
     [Fact]

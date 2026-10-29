@@ -8,10 +8,21 @@ namespace Aspire.Hosting.Traefik;
 /// <summary>
 /// Records an HTTP route declared on a routed resource with <c>WithTraefikRoute</c>.
 /// </summary>
-/// <param name="Traefik">The Traefik resource that receives the requests.</param>
-/// <param name="Options">The route options.</param>
-/// <param name="IsSignInRoute">
-/// Whether the route was added by <see cref="TraefikRoutingSubscriber"/> to send <c>/oauth2/*</c> on a protected host to
-/// oauth2-proxy. Such routes are recreated whenever the routes are applied.
-/// </param>
-internal sealed record TraefikRouteAnnotation(TraefikResource Traefik, TraefikRouteOptions Options, bool IsSignInRoute = false) : IResourceAnnotation;
+internal sealed class TraefikRouteAnnotation(TraefikResource traefik, TraefikRouteOptions options, bool isSignInRoute) : IResourceAnnotation
+{
+    /// <summary>
+    /// Gets the Traefik resource that receives the requests.
+    /// </summary>
+    public TraefikResource Traefik { get; } = traefik;
+
+    /// <summary>
+    /// Gets the route options.
+    /// </summary>
+    public TraefikRouteOptions Options { get; } = options;
+
+    /// <summary>
+    /// Gets a value indicating whether the route was added by <see cref="TraefikRoutingSubscriber"/> to send
+    /// <c>/oauth2/*</c> on a protected host to oauth2-proxy. Such routes are recreated whenever the routes are applied.
+    /// </summary>
+    public bool IsSignInRoute { get; } = isSignInRoute;
+}

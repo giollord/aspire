@@ -17,8 +17,13 @@ namespace Aspire.Hosting;
 /// </remarks>
 public static class TraefikMiddlewareTypesExtensions
 {
-    // Also used for the middleware behind TraefikRouteOptions.StripPathPrefix.
+    /// <summary>
+    /// The type of the <c>stripPrefix</c> middleware, also used for the middleware behind
+    /// <see cref="TraefikRouteOptions.StripPathPrefix"/>.
+    /// </summary>
     internal const string StripPrefixType = "stripPrefix";
+
+    private const string BasicAuthType = "basicAuth";
 
     /// <summary>
     /// Adds a <c>stripPrefix</c> middleware, which removes a path prefix before the request is forwarded.
@@ -34,6 +39,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddStripPrefix(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params string[] prefixes)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequirePaths(prefixes, nameof(prefixes));
 
         return builder.AddMiddleware(name, StripPrefixType)
@@ -51,6 +57,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddStripPrefixRegex(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params string[] regex)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequireItems(regex, nameof(regex));
 
         return builder.AddMiddleware(name, "stripPrefixRegex")
@@ -68,6 +75,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddAddPrefix(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string prefix)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequirePaths([prefix], nameof(prefix));
 
         return builder.AddMiddleware(name, "addPrefix")
@@ -86,6 +94,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddReplacePath(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string path)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequirePaths([path], nameof(path));
 
         return builder.AddMiddleware(name, "replacePath")
@@ -107,6 +116,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddReplacePathRegex(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string regex, string replacement)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(regex);
         ArgumentNullException.ThrowIfNull(replacement);
 
@@ -131,6 +141,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddRedirectScheme(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string scheme = "https", bool permanent = true, int? port = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(scheme);
 
         var middleware = builder.AddMiddleware(name, "redirectScheme")
@@ -154,6 +165,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddRedirectRegex(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string regex, string replacement, bool permanent = false)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(regex);
         ArgumentException.ThrowIfNullOrEmpty(replacement);
 
@@ -185,6 +197,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport(RunSyncOnBackgroundThread = true)]
     public static IResourceBuilder<TraefikMiddlewareResource> AddHeaders(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, Action<TraefikHeadersOptions> configure)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
 
         var options = new TraefikHeadersOptions();
@@ -217,6 +230,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport(RunSyncOnBackgroundThread = true)]
     public static IResourceBuilder<TraefikMiddlewareResource> AddSecurityHeaders(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, Action<TraefikHeadersOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         return builder.AddHeaders(name, options =>
         {
             options.StsSeconds = 31536000;
@@ -236,8 +250,12 @@ public static class TraefikMiddlewareTypesExtensions
     /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
     /// <remarks>See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/compress/"/>.</remarks>
     [AspireExport]
-    public static IResourceBuilder<TraefikMiddlewareResource> AddCompress(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name) =>
-        builder.AddMiddleware(name, "compress");
+    public static IResourceBuilder<TraefikMiddlewareResource> AddCompress(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder.AddMiddleware(name, "compress");
+    }
 
     /// <summary>
     /// Adds a <c>grpcWeb</c> middleware, which converts gRPC-Web requests from browsers into gRPC requests, so a
@@ -255,6 +273,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddGrpcWeb(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params string[] allowOrigins)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(allowOrigins);
 
         var middleware = builder.AddMiddleware(name, "grpcWeb");
@@ -277,6 +296,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddRetry(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, int attempts, TimeSpan? initialInterval = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentOutOfRangeException.ThrowIfLessThan(attempts, 1);
 
         var middleware = builder.AddMiddleware(name, "retry")
@@ -300,6 +320,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddCircuitBreaker(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string expression)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(expression);
 
         return builder.AddMiddleware(name, "circuitBreaker")
@@ -319,18 +340,28 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddBuffering(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, long? maxRequestBodyBytes = null, long? maxResponseBodyBytes = null)
     {
-        var middleware = builder.AddMiddleware(name, "buffering");
+        ArgumentNullException.ThrowIfNull(builder);
 
         if (maxRequestBodyBytes is { } request)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(request, nameof(maxRequestBodyBytes));
-            middleware.WithOption("maxRequestBodyBytes", request);
         }
 
         if (maxResponseBodyBytes is { } response)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(response, nameof(maxResponseBodyBytes));
-            middleware.WithOption("maxResponseBodyBytes", response);
+        }
+
+        var middleware = builder.AddMiddleware(name, "buffering");
+
+        if (maxRequestBodyBytes is { } maxRequest)
+        {
+            middleware.WithOption("maxRequestBodyBytes", maxRequest);
+        }
+
+        if (maxResponseBodyBytes is { } maxResponse)
+        {
+            middleware.WithOption("maxResponseBodyBytes", maxResponse);
         }
 
         return middleware;
@@ -348,6 +379,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddInFlightRequestLimit(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, long amount)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(amount);
 
         return builder.AddMiddleware(name, "inFlightReq")
@@ -370,6 +402,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddRateLimit(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, long average, long burst = 1, TimeSpan? period = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(average);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(burst);
 
@@ -403,6 +436,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddIpAllowList(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params string[] sourceRange)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequireItems(sourceRange, nameof(sourceRange));
 
         return builder.AddMiddleware(name, "ipAllowList")
@@ -428,19 +462,11 @@ public static class TraefikMiddlewareTypesExtensions
             throw new ArgumentException("A chain needs at least one middleware.", nameof(middlewares));
         }
 
-        foreach (var member in middlewares)
-        {
-            ArgumentNullException.ThrowIfNull(member, nameof(middlewares));
-
-            if (member.Resource.Parent != builder.Resource)
-            {
-                throw new ArgumentException($"The middleware '{member.Resource.Name}' belongs to '{member.Resource.Parent.Name}', not to '{builder.Resource.Name}'.", nameof(middlewares));
-            }
-        }
+        var members = TraefikBuilderExtensions.GetOwnMiddlewares(builder, middlewares, nameof(middlewares));
 
         var chain = builder.AddMiddleware(name, "chain")
-            .WithOption("middlewares", middlewares.Select(m => m.Resource.Name));
-        chain.Resource.References.AddRange(middlewares.Select(m => m.Resource));
+            .WithOption("middlewares", members.Select(m => m.Name));
+        chain.Resource.References.AddRange(members);
 
         return chain;
     }
@@ -461,14 +487,10 @@ public static class TraefikMiddlewareTypesExtensions
     public static IResourceBuilder<TraefikMiddlewareResource> AddErrorPages<T>(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string[] status, IResourceBuilder<T> errorPages, string query = "/{status}.html")
         where T : IResourceWithEndpoints
     {
+        ArgumentNullException.ThrowIfNull(builder);
         RequireItems(status, nameof(status));
         ArgumentNullException.ThrowIfNull(errorPages);
-        ArgumentException.ThrowIfNullOrEmpty(query);
-
-        if (!query.StartsWith('/'))
-        {
-            throw new ArgumentException($"The query '{query}' must start with '/'.", nameof(query));
-        }
+        TraefikNames.ThrowIfInvalidPath(query, "query", nameof(query));
 
         var middleware = builder.AddMiddleware(name, "errors")
             .WithOption("status", status)
@@ -502,6 +524,7 @@ public static class TraefikMiddlewareTypesExtensions
     [AspireExport]
     public static IResourceBuilder<TraefikMiddlewareResource> AddBasicAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, params IResourceBuilder<ParameterResource>[] users)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(users);
 
         if (users.Length == 0)
@@ -509,8 +532,13 @@ public static class TraefikMiddlewareTypesExtensions
             throw new ArgumentException("Basic authentication needs at least one user.", nameof(users));
         }
 
-        return builder.AddMiddleware(name, "basicAuth")
-            .WithOption("users", users.Select(user => ReferenceExpression.Create($"{user ?? throw new ArgumentException("A user is null.", nameof(users))}")));
+        if (users.Any(user => user is null))
+        {
+            throw new ArgumentException("A user is null.", nameof(users));
+        }
+
+        return builder.AddMiddleware(name, BasicAuthType)
+            .WithOption("users", users.Select(user => ReferenceExpression.Create($"{user}")));
     }
 
     /// <summary>
@@ -549,8 +577,18 @@ public static class TraefikMiddlewareTypesExtensions
             throw new InvalidOperationException($"The Traefik middleware '{name}' uses a plain password, which can't be hashed when publishing. Pass htpasswd entries to AddBasicAuth instead.");
         }
 
-        return builder.AddMiddleware(name, "basicAuth")
+        return builder.AddMiddleware(name, BasicAuthType)
             .WithOption("users", [ReferenceExpression.Create($"{new TraefikHtpasswdShaEntry(user, password.Resource)}")]);
+    }
+
+    private static void RequirePaths(string[] paths, string parameterName)
+    {
+        RequireItems(paths, parameterName);
+
+        foreach (var path in paths)
+        {
+            TraefikNames.ThrowIfInvalidPath(path, "path", parameterName);
+        }
     }
 
     private static void RequireItems(string[] values, string parameterName)
@@ -560,16 +598,6 @@ public static class TraefikMiddlewareTypesExtensions
         if (values.Length == 0 || values.Any(string.IsNullOrWhiteSpace))
         {
             throw new ArgumentException("At least one value is required, and values can't be empty.", parameterName);
-        }
-    }
-
-    private static void RequirePaths(string[] paths, string parameterName)
-    {
-        RequireItems(paths, parameterName);
-
-        if (paths.FirstOrDefault(p => !p.StartsWith('/')) is { } invalid)
-        {
-            throw new ArgumentException($"The path '{invalid}' must start with '/'.", parameterName);
         }
     }
 }

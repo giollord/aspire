@@ -14,6 +14,10 @@ internal static class TraefikUrls
     /// Builds a URL such as <c>http://api.dev.localhost:8000</c> in run mode, or <c>https://api.example.com</c> at
     /// publish time.
     /// </summary>
+    /// <param name="traefik">The Traefik the route targets.</param>
+    /// <param name="options">The route options, which need a host.</param>
+    /// <param name="isPublishMode">Whether the URL is for the published application.</param>
+    /// <returns>The URL.</returns>
     /// <remarks>
     /// <para>
     /// In run mode the entry point's host port is random unless pinned, so the URL includes it. At publish time the

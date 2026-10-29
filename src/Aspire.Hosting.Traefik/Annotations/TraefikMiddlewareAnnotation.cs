@@ -8,4 +8,10 @@ namespace Aspire.Hosting.Traefik;
 /// <summary>
 /// Records a middleware applied to every route of a resource with <c>WithTraefikMiddleware</c>.
 /// </summary>
-internal sealed record TraefikMiddlewareAnnotation(TraefikMiddlewareResource Middleware) : IResourceAnnotation;
+internal sealed class TraefikMiddlewareAnnotation(TraefikMiddlewareResource middleware) : IResourceAnnotation
+{
+    /// <summary>
+    /// Gets the middleware.
+    /// </summary>
+    public TraefikMiddlewareResource Middleware { get; } = middleware;
+}

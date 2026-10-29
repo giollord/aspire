@@ -167,7 +167,7 @@ public class TraefikForwardAuthTests(ITestOutputHelper testOutputHelper)
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "web", clientSecret,
             options => options.LoginUrl = ReferenceExpression.Create($"https://login.example.com/authorize")));
-        Assert.Equal("configure", exception.ParamName);
+        Assert.Equal("Set LoginUrl, RedeemUrl, and JwksUrl together, or none of them. (Parameter 'configure')", exception.Message);
     }
 
     [Fact]

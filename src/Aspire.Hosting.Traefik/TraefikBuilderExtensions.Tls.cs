@@ -185,16 +185,16 @@ public static partial class TraefikBuilderExtensions
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal withTlsDomain export, which accepts strings or reference expressions.")]
     public static IResourceBuilder<TraefikResource> WithTlsDomain(this IResourceBuilder<TraefikResource> builder, string main, params string[] sans)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(main);
         ArgumentNullException.ThrowIfNull(sans);
 
-        return builder.WithTlsDomain(
-            ReferenceExpression.Create($"{main}"),
-            [.. sans.Select(san =>
-            {
-                ArgumentException.ThrowIfNullOrWhiteSpace(san, nameof(sans));
-                return ReferenceExpression.Create($"{san}");
-            })]);
+        foreach (var san in sans)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(san, nameof(sans));
+        }
+
+        return builder.WithTlsDomain(ReferenceExpression.Create($"{main}"), [.. sans.Select(san => ReferenceExpression.Create($"{san}"))]);
     }
 
     /// <inheritdoc cref="WithTlsDomain(IResourceBuilder{TraefikResource}, string, string[])"/>
@@ -221,109 +221,6 @@ public static partial class TraefikBuilderExtensions
         }
 
         builder.Resource.TlsDomains.Add(new TraefikTlsDomain(main, sans));
-
-        return builder;
-    }
-
-    /// <summary>
-    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, for example a
-    /// wildcard certificate.
-    /// </summary>
-    /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="main">The main domain of the certificate, for example <c>example.com</c>. It can reference parameters.</param>
-    /// <param name="sans">The subject alternative names as reference expressions, for example <c>*.example.com</c>.</param>
-    /// <returns>A reference to the Traefik resource builder.</returns>
-    /// <remarks>
-    /// A wildcard requires the DNS-01 challenge on the default resolver. The domains only apply at publish time.
-    /// </remarks>
-    // The alternative names are reference expressions only: ATS has no arrays of unions, and a union on an `object[]`
-    // parameter is exported as a single value.
-    [AspireExport("withTlsDomain")]
-    internal static IResourceBuilder<TraefikResource> WithTlsDomainPolyglot(
-        this IResourceBuilder<TraefikResource> builder,
-        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object main,
-        ReferenceExpression[]? sans = null)
-    {
-        var mainExpression = main switch
-        {
-            string text => ReferenceExpression.Create($"{text}"),
-            ReferenceExpression expression => expression,
-            _ => throw new ArgumentException($"Unsupported type '{main?.GetType().Name}'. Expected a string or a reference expression.", nameof(main)),
-        };
-
-        return builder.WithTlsDomain(mainExpression, sans ?? []);
-    }
-
-    /// <summary>
-    /// Enables HTTPS with certificates issued by Let's Encrypt.
-    /// </summary>
-    /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="email">The email address registered with Let's Encrypt, used for expiry notices. A string, a parameter, or a reference expression.</param>
-    /// <param name="resolverName">The name of the Traefik certificate resolver.</param>
-    /// <param name="challenge">The ACME challenge used to prove control of the domains.</param>
-    /// <param name="staging">Whether to use the Let's Encrypt staging environment, which has higher rate limits but issues untrusted certificates.</param>
-    /// <returns>A reference to the Traefik resource builder.</returns>
-    /// <remarks>
-    /// Adds the <c>websecure</c> entry point and makes routes use it with TLS. Certificates are only requested at publish
-    /// time; in run mode Traefik serves the HTTPS certificate from Aspire.
-    /// </remarks>
-    [AspireExport("withLetsEncrypt")]
-    internal static IResourceBuilder<TraefikResource> WithLetsEncryptPolyglot(
-        this IResourceBuilder<TraefikResource> builder,
-        [AspireUnion(typeof(string), typeof(IResourceBuilder<ParameterResource>), typeof(ReferenceExpression))] object email,
-        string resolverName = DefaultLetsEncryptResolverName,
-        TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn,
-        bool staging = false)
-    {
-        return email switch
-        {
-            string value => builder.WithLetsEncrypt(value, resolverName, challenge, staging),
-            IResourceBuilder<ParameterResource> parameter => builder.WithLetsEncrypt(parameter, resolverName, challenge, staging),
-            ReferenceExpression expression => builder.WithLetsEncrypt(expression, resolverName, challenge, staging),
-            _ => throw new ArgumentException($"Unsupported email type '{email?.GetType().Name}'. Expected a string, a parameter, or a reference expression.", nameof(email)),
-        };
-    }
-
-    private static IResourceBuilder<TraefikResource> ConfigureLetsEncrypt(IResourceBuilder<TraefikResource> builder, ReferenceExpression email, string resolverName, TraefikAcmeChallenge challenge, bool staging)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(resolverName);
-
-        if (!TraefikNames.IsValidName(resolverName))
-        {
-            throw new ArgumentException($"The resolver name '{resolverName}' is invalid. Use letters, digits, '-' and '_' only.", nameof(resolverName));
-        }
-
-        var resource = builder.Resource;
-        var isPublishMode = builder.ApplicationBuilder.ExecutionContext.IsPublishMode;
-        var hadWebSecure = resource.HasWebSecureEntryPoint;
-
-        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
-        var resolver = resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, resolverName, StringComparison.OrdinalIgnoreCase));
-        if (resolver is null)
-        {
-            resolver = new TraefikAcmeResolver(resolverName, email);
-            resource.AcmeResolvers.Add(resolver);
-        }
-
-        resolver.Email = email;
-        resolver.Challenge = challenge;
-        resolver.Staging = staging;
-
-        if (!hadWebSecure)
-        {
-            builder.WithEndpoint(
-                port: resource.HostHttpsPort ?? (isPublishMode ? TraefikResource.WebSecureTargetPort : null),
-                targetPort: TraefikResource.WebSecureTargetPort,
-                scheme: "https",
-                name: TraefikResource.WebSecureEntryPointName,
-                isExternal: true);
-
-            if (isPublishMode)
-            {
-                // Keep issued certificates across restarts; Let's Encrypt rate-limits repeated issuance.
-                builder.WithVolume(VolumeNameGenerator.Generate(builder, "letsencrypt"), TraefikResource.AcmeStorageDirectory);
-            }
-        }
 
         return builder;
     }
@@ -383,6 +280,84 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
+    /// Redirects HTTP requests on the <c>web</c> entry point to HTTPS on the <c>websecure</c> entry point.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// Requires TLS to be configured, for example with <c>WithLetsEncrypt</c>. In run mode the redirect targets the
+    /// host port of <c>websecure</c>, so it works with randomly assigned ports.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithHttpsRedirect(this IResourceBuilder<TraefikResource> builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Resource.HttpsRedirectEnabled = true;
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Enables HTTPS with certificates issued by Let's Encrypt.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="email">The email address registered with Let's Encrypt, used for expiry notices. A string, a parameter, or a reference expression.</param>
+    /// <param name="resolverName">The name of the Traefik certificate resolver.</param>
+    /// <param name="challenge">The ACME challenge used to prove control of the domains.</param>
+    /// <param name="staging">Whether to use the Let's Encrypt staging environment, which has higher rate limits but issues untrusted certificates.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
+    /// <remarks>
+    /// Adds the <c>websecure</c> entry point and makes routes use it with TLS. Certificates are only requested at publish
+    /// time; in run mode Traefik serves the HTTPS certificate from Aspire.
+    /// </remarks>
+    [AspireExport("withLetsEncrypt")]
+    internal static IResourceBuilder<TraefikResource> WithLetsEncryptPolyglot(
+        this IResourceBuilder<TraefikResource> builder,
+        [AspireUnion(typeof(string), typeof(IResourceBuilder<ParameterResource>), typeof(ReferenceExpression))] object email,
+        string resolverName = DefaultLetsEncryptResolverName,
+        TraefikAcmeChallenge challenge = TraefikAcmeChallenge.TlsAlpn,
+        bool staging = false)
+    {
+        return email switch
+        {
+            string value => builder.WithLetsEncrypt(value, resolverName, challenge, staging),
+            IResourceBuilder<ParameterResource> parameter => builder.WithLetsEncrypt(parameter, resolverName, challenge, staging),
+            ReferenceExpression expression => builder.WithLetsEncrypt(expression, resolverName, challenge, staging),
+            _ => throw new ArgumentException($"Unsupported type '{email?.GetType().Name}'. Expected a string, a parameter, or a reference expression.", nameof(email)),
+        };
+    }
+
+    /// <summary>
+    /// Requests a certificate for a domain and its alternative names on the <c>websecure</c> entry point, for example a
+    /// wildcard certificate.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="main">The main domain of the certificate, for example <c>example.com</c>. It can reference parameters.</param>
+    /// <param name="sans">The subject alternative names as reference expressions, for example <c>*.example.com</c>.</param>
+    /// <returns>A reference to the Traefik resource builder.</returns>
+    /// <remarks>
+    /// A wildcard requires the DNS-01 challenge on the default resolver. The domains only apply at publish time.
+    /// </remarks>
+    // The alternative names are reference expressions only: ATS has no arrays of unions, and a union on an `object[]`
+    // parameter is exported as a single value.
+    [AspireExport("withTlsDomain")]
+    internal static IResourceBuilder<TraefikResource> WithTlsDomainPolyglot(
+        this IResourceBuilder<TraefikResource> builder,
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object main,
+        ReferenceExpression[]? sans = null)
+    {
+        var mainExpression = main switch
+        {
+            string text => ReferenceExpression.Create($"{text}"),
+            ReferenceExpression expression => expression,
+            _ => throw new ArgumentException($"Unsupported type '{main?.GetType().Name}'. Expected a string or a reference expression.", nameof(main)),
+        };
+
+        return builder.WithTlsDomain(mainExpression, sans ?? []);
+    }
+
+    /// <summary>
     /// Sets the ACME directory URL that the certificate resolver configured with <c>withLetsEncrypt</c> requests
     /// certificates from.
     /// </summary>
@@ -398,25 +373,47 @@ public static partial class TraefikBuilderExtensions
         {
             string value => builder.WithAcmeCaServer(value),
             IResourceBuilder<ParameterResource> parameter => builder.WithAcmeCaServer(parameter),
-            _ => throw new ArgumentException($"Unsupported CA server type '{caServer?.GetType().Name}'. Expected a string or a parameter.", nameof(caServer)),
+            _ => throw new ArgumentException($"Unsupported type '{caServer?.GetType().Name}'. Expected a string or a parameter.", nameof(caServer)),
         };
     }
 
-    /// <summary>
-    /// Redirects HTTP requests on the <c>web</c> entry point to HTTPS on the <c>websecure</c> entry point.
-    /// </summary>
-    /// <param name="builder">The Traefik resource builder.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// Requires TLS to be configured, for example with <c>WithLetsEncrypt</c>. In run mode the redirect targets the
-    /// host port of <c>websecure</c>, so it works with randomly assigned ports.
-    /// </remarks>
-    [AspireExport]
-    public static IResourceBuilder<TraefikResource> WithHttpsRedirect(this IResourceBuilder<TraefikResource> builder)
+    private static IResourceBuilder<TraefikResource> ConfigureLetsEncrypt(IResourceBuilder<TraefikResource> builder, ReferenceExpression email, string resolverName, TraefikAcmeChallenge challenge, bool staging)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resolverName);
 
-        builder.Resource.HttpsRedirectEnabled = true;
+        TraefikNames.ThrowIfInvalidName(resolverName, "resolver name", nameof(resolverName));
+
+        var resource = builder.Resource;
+        var isPublishMode = builder.ApplicationBuilder.ExecutionContext.IsPublishMode;
+        var hadWebSecure = resource.HasWebSecureEntryPoint;
+
+        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
+        var resolver = resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, resolverName, StringComparison.OrdinalIgnoreCase));
+        if (resolver is null)
+        {
+            resolver = new TraefikAcmeResolver(resolverName, email);
+            resource.AcmeResolvers.Add(resolver);
+        }
+
+        resolver.Email = email;
+        resolver.Challenge = challenge;
+        resolver.Staging = staging;
+
+        if (!hadWebSecure)
+        {
+            builder.WithEndpoint(
+                port: resource.HostHttpsPort ?? (isPublishMode ? TraefikResource.WebSecureTargetPort : null),
+                targetPort: TraefikResource.WebSecureTargetPort,
+                scheme: "https",
+                name: TraefikResource.WebSecureEntryPointName,
+                isExternal: true);
+
+            if (isPublishMode)
+            {
+                // Keep issued certificates across restarts; Let's Encrypt rate-limits repeated issuance.
+                builder.WithVolume(VolumeNameGenerator.Generate(builder, "letsencrypt"), TraefikResource.AcmeStorageDirectory);
+            }
+        }
 
         return builder;
     }

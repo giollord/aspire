@@ -8,4 +8,10 @@ namespace Aspire.Hosting.Traefik;
 /// <summary>
 /// Marks a resource that already joins an external Traefik's shared network because a middleware calls it.
 /// </summary>
-internal sealed record TraefikNetworkAnnotation(string Network) : IResourceAnnotation;
+internal sealed class TraefikNetworkAnnotation(string network) : IResourceAnnotation
+{
+    /// <summary>
+    /// Gets the name of the shared network.
+    /// </summary>
+    public string Network { get; } = network;
+}

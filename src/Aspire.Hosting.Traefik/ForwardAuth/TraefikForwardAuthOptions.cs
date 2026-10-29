@@ -61,32 +61,17 @@ public sealed class TraefikForwardAuthOptions
     /// <summary>
     /// Sets the options that have a value on the middleware. Unset options keep Traefik's defaults.
     /// </summary>
+    /// <param name="options">The options of the middleware the values are written to.</param>
     internal void ApplyTo(TraefikOptionMap options)
     {
-        SetList(options, "authResponseHeaders", AuthResponseHeaders);
-        Set(options, "authResponseHeadersRegex", AuthResponseHeadersRegex);
-        SetList(options, "authRequestHeaders", AuthRequestHeaders);
-        SetList(options, "addAuthCookiesToResponse", AddAuthCookiesToResponse);
-        Set(options, "forwardBody", ForwardBody);
-        Set(options, "maxBodySize", MaxBodySize);
-        Set(options, "preserveLocationHeader", PreserveLocationHeader);
-        Set(options, "preserveRequestMethod", PreserveRequestMethod);
-    }
-
-    private static void SetList(TraefikOptionMap options, string path, IList<string> values)
-    {
-        if (values.Count > 0)
-        {
-            options.Set(path, values.Cast<object>().ToArray());
-        }
-    }
-
-    private static void Set(TraefikOptionMap options, string path, object? value)
-    {
-        if (value is not null)
-        {
-            options.Set(path, value);
-        }
+        options.SetIfNotEmpty("authResponseHeaders", AuthResponseHeaders);
+        options.SetIfNotNull("authResponseHeadersRegex", AuthResponseHeadersRegex);
+        options.SetIfNotEmpty("authRequestHeaders", AuthRequestHeaders);
+        options.SetIfNotEmpty("addAuthCookiesToResponse", AddAuthCookiesToResponse);
+        options.SetIfNotNull("forwardBody", ForwardBody);
+        options.SetIfNotNull("maxBodySize", MaxBodySize);
+        options.SetIfNotNull("preserveLocationHeader", PreserveLocationHeader);
+        options.SetIfNotNull("preserveRequestMethod", PreserveRequestMethod);
     }
 }
 

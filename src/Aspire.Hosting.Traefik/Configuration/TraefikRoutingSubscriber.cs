@@ -27,8 +27,11 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventingSubscriber
 {
-    // The type of the relationships from Traefik to its backends, which the dashboard shows.
+    // The types of the relationships the dashboard shows: from Traefik to its backends, and from a routed resource to
+    // the middlewares of its routes.
     private const string RouteRelationshipType = "Route";
+
+    private const string MiddlewareRelationshipType = "Middleware";
 
     /// <inheritdoc/>
     public Task SubscribeAsync(IDistributedApplicationEventing eventing, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
@@ -48,7 +51,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
     /// relationships, Docker Compose customizations) that a second run would duplicate. Only the generated sign-in
     /// routes and the route lists on Traefik are reset first.
     /// </summary>
-    internal static void ApplyRoutes(DistributedApplicationModel model, bool isPublishMode)
+    /// <param name="model">The application model.</param>
+    /// <param name="isPublishMode">Whether the application is being published, which writes Docker labels instead of Traefik's file configuration.</param>
+    public static void ApplyRoutes(DistributedApplicationModel model, bool isPublishMode)
     {
         foreach (var traefik in model.Resources.OfType<TraefikResource>())
         {
@@ -83,11 +88,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 continue;
             }
 
-            if (resource is not IResourceWithEndpoints resourceWithEndpoints)
-            {
-                throw new InvalidOperationException($"Resource '{resource.Name}' is routed through Traefik but has no endpoints.");
-            }
-
+            var resourceWithEndpoints = GetRoutedResource(resource);
             var routes = new List<TraefikRoute>(annotations.Count);
             var resourceMiddlewares = resource.Annotations.OfType<TraefikMiddlewareAnnotation>().Select(a => a.Middleware).ToList();
 
@@ -104,10 +105,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 var annotation = annotations[i];
                 var routerName = annotation.Options.RouterName ?? (i == 0 ? resource.Name : $"{resource.Name}-{i + 1}");
 
-                if (!TraefikNames.IsValidName(routerName))
-                {
-                    throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
-                }
+                ThrowIfInvalidRouterName(resource, routerName);
 
                 if (routerNames.TryGetValue(routerName, out var existing))
                 {
@@ -118,11 +116,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
                 // An external Traefik's resolvers aren't known, but the managed one's are, in run mode too, so a typo
                 // shows up before the first deployment.
-                if (annotation.Options.CertResolver is { } certResolver &&
-                    annotation.Traefik.PublishExternal is null &&
-                    !annotation.Traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
+                if (annotation.Options.CertResolver is { } certResolver && annotation.Traefik.PublishExternal is null)
                 {
-                    throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{annotation.Traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
+                    ValidateCertResolver(annotation.Traefik, resource, routerName, certResolver, "HTTP");
                 }
 
                 // Traefik only logs a router whose entry point is missing or listens for UDP, and the route answers 404,
@@ -180,235 +176,13 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 // Only middleware resources: the StripPathPrefix middleware isn't in the model.
                 foreach (var middleware in routes.SelectMany(r => r.Middlewares).Distinct().Where(m => m.Parent.Middlewares.Contains(m)))
                 {
-                    resource.Annotations.Add(new ResourceRelationshipAnnotation(middleware, "Middleware"));
+                    resource.Annotations.Add(new ResourceRelationshipAnnotation(middleware, MiddlewareRelationshipType));
                 }
             }
         }
 
         ApplyTransportRoutes(model, isPublishMode, publishesToDockerCompose);
         SetErrorPageServices(model);
-    }
-
-    /// <summary>
-    /// Resolves the TCP and UDP routes, like <see cref="ApplyRoutes"/> does for HTTP routes.
-    /// </summary>
-    private static void ApplyTransportRoutes(DistributedApplicationModel model, bool isPublishMode, bool publishesToDockerCompose)
-    {
-        // TCP and UDP routers live in their own namespaces in Traefik (`tcp.routers`, `udp.routers`), so a name only has
-        // to be unique within its protocol.
-        var routerNames = new Dictionary<(string Protocol, string Name), (IResource Owner, string Name)>(new TransportRouterNameComparer());
-
-        foreach (var resource in model.Resources)
-        {
-            var annotations = resource.Annotations
-                .Where(a => a is TraefikTcpRouteAnnotation or TraefikUdpRouteAnnotation)
-                .ToList();
-            if (annotations.Count == 0)
-            {
-                continue;
-            }
-
-            if (resource is not IResourceWithEndpoints resourceWithEndpoints)
-            {
-                throw new InvalidOperationException($"Resource '{resource.Name}' is routed through Traefik but has no endpoints.");
-            }
-
-            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-            var routes = new List<TraefikTransportRoute>(annotations.Count);
-
-            foreach (var annotation in annotations)
-            {
-                var (traefik, tcp, entryPoint, endpointName, routerName) = annotation switch
-                {
-                    TraefikTcpRouteAnnotation t => (t.Traefik, t.Options, t.Options.EntryPoint!, t.Options.EndpointName, t.Options.RouterName),
-                    TraefikUdpRouteAnnotation u => (u.Traefik, (TraefikTcpRouteOptions?)null, u.EntryPoint, u.EndpointName, (string?)null),
-                    _ => throw new UnreachableException(),
-                };
-
-                var protocol = TraefikTransportRoute.GetProtocol(tcp);
-                var index = counts[protocol] = counts.GetValueOrDefault(protocol) + 1;
-                routerName ??= index == 1 ? resource.Name : $"{resource.Name}-{index}";
-
-                if (!TraefikNames.IsValidName(routerName))
-                {
-                    throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
-                }
-
-                if (!routerNames.TryAdd((protocol, routerName), (resource, routerName)))
-                {
-                    var existing = routerNames[(protocol, routerName)];
-                    throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' of resource '{resource.Name}' clashes with '{existing.Name}' of '{existing.Owner.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
-                }
-
-                // An external Traefik's entry points and resolvers aren't known when published.
-                if (!isPublishMode || traefik.PublishExternal is null)
-                {
-                    ValidateEntryPoint(traefik, resource, routerName, entryPoint, protocol.ToUpperInvariant(), isUdp: tcp is null);
-
-                    if (tcp?.CertResolver is { } certResolver && !traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        throw new InvalidOperationException($"The Traefik TCP route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
-                    }
-                }
-
-                var endpoint = ResolveTransportEndpoint(resourceWithEndpoints, endpointName, protocol);
-                var route = new TraefikTransportRoute(traefik, resourceWithEndpoints, routerName, endpoint, entryPoint, tcp);
-
-                traefik.TransportRoutes.Add(route);
-                routes.Add(route);
-
-                if (publishesToDockerCompose)
-                {
-                    if (resource is IResourceWithEnvironment resourceWithEnvironment)
-                    {
-                        TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), endpoint);
-                    }
-
-                    var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
-                    resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation(
-                        (composeService, service) => TraefikDockerLabels.Apply(composeService, service, route, defaults)));
-                }
-            }
-
-            if (!isPublishMode)
-            {
-                foreach (var traefik in routes.Select(r => r.Traefik).Distinct())
-                {
-                    if (!traefik.Annotations.OfType<ResourceRelationshipAnnotation>().Any(a => a.Resource == resource && a.Type == RouteRelationshipType))
-                    {
-                        traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, RouteRelationshipType));
-                    }
-                }
-            }
-        }
-    }
-
-    private static void ValidateEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, string kind, bool isUdp)
-    {
-        var custom = traefik.CustomEntryPoints.FirstOrDefault(e => e.Name == entryPoint);
-        var exists = custom is not null
-            || entryPoint == TraefikResource.WebEntryPointName
-            || (entryPoint == TraefikResource.WebSecureEntryPointName && traefik.HasWebSecureEntryPoint);
-
-        if (!exists)
-        {
-            throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for '{TraefikResource.WebSecureEntryPointName}'.");
-        }
-
-        if (isUdp != (custom?.IsUdp ?? false))
-        {
-            throw new InvalidOperationException(isUdp
-                ? $"The Traefik UDP route '{routerName}' of resource '{resource.Name}' needs a UDP entry point, but '{entryPoint}' listens for TCP. Add one with WithEntryPoint(name, targetPort, scheme: \"udp\")."
-                : $"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' needs a TCP entry point, but '{entryPoint}' listens for UDP.");
-        }
-    }
-
-    private static EndpointReference ResolveTransportEndpoint(IResourceWithEndpoints resource, string? endpointName, string protocol)
-    {
-        var endpoints = resource.Annotations.OfType<EndpointAnnotation>().ToList();
-        var annotation = endpointName is not null
-            ? endpoints.FirstOrDefault(e => string.Equals(e.Name, endpointName, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.")
-            : endpoints.FirstOrDefault(e => string.Equals(e.Name, protocol, StringComparison.OrdinalIgnoreCase))
-                ?? (endpoints.Count == 1
-                    ? endpoints[0]
-                    : throw new InvalidOperationException($"Resource '{resource.Name}' has {(endpoints.Count == 0 ? "no endpoints" : "several endpoints and none is named '" + protocol + "'")}. Set the endpoint name of its Traefik {protocol.ToUpperInvariant()} route."));
-
-        // A TCP route can target any TCP endpoint, including an HTTP one, but datagrams can only go to a UDP port.
-        var expected = protocol == TraefikTransportRoute.UdpProtocol ? ProtocolType.Udp : ProtocolType.Tcp;
-        if (annotation.Protocol != expected)
-        {
-            throw new InvalidOperationException($"The endpoint '{annotation.Name}' of resource '{resource.Name}' uses {annotation.Protocol}, so it can't receive a Traefik {protocol.ToUpperInvariant()} route.");
-        }
-
-        return resource.GetEndpoint(annotation.Name);
-    }
-
-    private static void ApplyPublishFileConfiguration(TraefikResource traefik)
-    {
-        if (traefik.PublishExternal is not null && traefik.EntryPointMiddlewares.Count > 0)
-        {
-            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' is published as external, so its entry-point middlewares can't be deployed. Configure them on the external Traefik instead.");
-        }
-
-        if (!traefik.HasPublishFileConfiguration)
-        {
-            return;
-        }
-
-        // Endpoint values in the middlewares, such as a forward authentication address, are resolved through
-        // environment variables of Traefik's own service, as they are for routed services (see TraefikDockerLabels).
-        TraefikDockerLabels.AddMiddlewareValueProbes(traefik, TraefikDynamicConfiguration.GetPublishMiddlewares(traefik));
-
-        traefik.Annotations.Add(new DockerComposeServiceCustomizationAnnotation((composeService, service) =>
-        {
-            var content = TraefikDynamicConfiguration.GeneratePublish(traefik, composeService, service);
-            TraefikDockerLabels.RemoveProbes(service);
-
-            // The config itself is added to the compose file by AddTraefik, which can reach the environment's
-            // ConfigureComposeFile; that runs after every service is generated.
-            var name = $"{service.Name}-dynamic";
-            traefik.PublishFileConfiguration = new(composeService.Parent, name, content);
-            service.AddConfig(new ConfigReference
-            {
-                Source = name,
-                Target = $"{TraefikResource.DynamicConfigurationDirectory}/{TraefikDynamicConfiguration.FileName}",
-            });
-        }));
-    }
-
-    private static void SetErrorPageServices(DistributedApplicationModel model)
-    {
-        foreach (var middleware in model.Resources.OfType<TraefikMiddlewareResource>())
-        {
-            if (middleware.ErrorPageResource is not { } errorPages)
-            {
-                continue;
-            }
-
-            // The service of a route has the router's name. The first route of the resource is used.
-            var route = middleware.Parent.Routes.FirstOrDefault(r => r.Resource == errorPages)
-                ?? throw new InvalidOperationException($"The Traefik middleware '{middleware.Name}' serves error pages from '{errorPages.Name}', which has no route through '{middleware.Parent.Name}'. Call WithTraefikRoute on it.");
-
-            middleware.Options.Set("service", route.RouterName);
-        }
-    }
-
-    private static List<TraefikMiddlewareResource> GetMiddlewares(IResource resource, string routerName, TraefikRouteAnnotation annotation, List<TraefikMiddlewareResource> resourceMiddlewares)
-    {
-        foreach (var middleware in annotation.Options.Middlewares)
-        {
-            if (middleware.Parent != annotation.Traefik)
-            {
-                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' goes through '{annotation.Traefik.Name}', but its middleware '{middleware.Name}' belongs to '{middleware.Parent.Name}'.");
-            }
-        }
-
-        // Resource-wide middlewares (usually authentication or security headers) run before the route's own ones
-        // (usually path rewrites), so they see the request as the client sent it. A middleware listed in both
-        // places runs once, at its first position.
-        var middlewares = resourceMiddlewares
-            .Where(m => m.Parent == annotation.Traefik)
-            .Concat(annotation.Options.Middlewares)
-            .Distinct()
-            .ToList();
-
-        if (annotation.Options.StripPathPrefix)
-        {
-            // Last, so the route's own middlewares still see the path the route matched on. The middleware only
-            // exists in Traefik's configuration, not as a resource.
-            var name = $"{routerName}-strip";
-            if (annotation.Traefik.Middlewares.Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' strips its path prefix with a middleware named '{name}', but '{annotation.Traefik.Name}' already has a middleware with that name.");
-            }
-
-            var strip = new TraefikMiddlewareResource(name, TraefikMiddlewareTypesExtensions.StripPrefixType, annotation.Traefik);
-            strip.Options.Set("prefixes", new object[] { annotation.Options.PathPrefix! });
-            middlewares.Add(strip);
-        }
-
-        return middlewares;
     }
 
     /// <summary>
@@ -480,16 +254,168 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 return;
             }
 
+            // Only middlewares added by AddOAuth2ProxyForwardAuth are passed here, and they all have the container.
+            var proxy = middleware.OAuth2Proxy!;
+
             middleware.ProtectedHosts.Add(host);
-            middleware.OAuth2Proxy!.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
+            proxy.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
             {
                 Host = host,
                 PathPrefix = TraefikForwardAuthExtensions.OAuth2ProxyPrefix,
                 Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
                 EntryPoint = entryPoint,
-                RouterName = $"{middleware.OAuth2Proxy.Name}-{middleware.ProtectedHosts.Count}",
-            }, IsSignInRoute: true));
+                RouterName = $"{proxy.Name}-{middleware.ProtectedHosts.Count}",
+            }, isSignInRoute: true));
         }
+    }
+
+    private static void ApplyPublishFileConfiguration(TraefikResource traefik)
+    {
+        if (traefik.PublishExternal is not null && traefik.EntryPointMiddlewares.Count > 0)
+        {
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' is published as external, so its entry-point middlewares can't be deployed. Configure them on the external Traefik instead.");
+        }
+
+        if (!traefik.HasPublishFileConfiguration)
+        {
+            return;
+        }
+
+        // Endpoint values in the middlewares, such as a forward authentication address, are resolved through
+        // environment variables of Traefik's own service, as they are for routed services (see TraefikDockerLabels).
+        TraefikDockerLabels.AddMiddlewareValueProbes(traefik, TraefikDynamicConfiguration.GetPublishMiddlewares(traefik));
+
+        traefik.Annotations.Add(new DockerComposeServiceCustomizationAnnotation((composeService, service) =>
+        {
+            var content = TraefikDynamicConfiguration.GeneratePublish(traefik, composeService, service);
+            TraefikDockerLabels.RemoveProbes(service);
+
+            // The config itself is added to the compose file by AddTraefik, which can reach the environment's
+            // ConfigureComposeFile; that runs after every service is generated.
+            var name = $"{service.Name}-dynamic";
+            traefik.PublishFileConfiguration = new(composeService.Parent, name, content);
+            service.AddConfig(new ConfigReference
+            {
+                Source = name,
+                Target = $"{TraefikResource.DynamicConfigurationDirectory}/{TraefikDynamicConfiguration.FileName}",
+            });
+        }));
+    }
+
+    private static IResourceWithEndpoints GetRoutedResource(IResource resource)
+    {
+        if (resource is not IResourceWithEndpoints resourceWithEndpoints)
+        {
+            throw new InvalidOperationException($"Resource '{resource.Name}' is routed through Traefik but has no endpoints.");
+        }
+
+        return resourceWithEndpoints;
+    }
+
+    private static void ThrowIfInvalidRouterName(IResource resource, string routerName)
+    {
+        if (!TraefikNames.IsValidName(routerName))
+        {
+            throw new InvalidOperationException($"The Traefik router name '{routerName}' of resource '{resource.Name}' is invalid. Use letters, digits, '-' and '_' only.");
+        }
+    }
+
+    private static void ValidateCertResolver(TraefikResource traefik, IResource resource, string routerName, string certResolver, string kind)
+    {
+        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
+        if (!traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
+        }
+    }
+
+    private static void ValidateEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, string kind, bool isUdp)
+    {
+        var custom = traefik.CustomEntryPoints.FirstOrDefault(e => e.Name == entryPoint);
+        var exists = custom is not null
+            || entryPoint == TraefikResource.WebEntryPointName
+            || (entryPoint == TraefikResource.WebSecureEntryPointName && traefik.HasWebSecureEntryPoint);
+
+        if (!exists)
+        {
+            throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for '{TraefikResource.WebSecureEntryPointName}'.");
+        }
+
+        if (isUdp != (custom?.IsUdp ?? false))
+        {
+            throw new InvalidOperationException(isUdp
+                ? $"The Traefik UDP route '{routerName}' of resource '{resource.Name}' needs a UDP entry point, but '{entryPoint}' listens for TCP. Add one with WithEntryPoint(name, targetPort, scheme: \"udp\")."
+                : $"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' needs a TCP entry point, but '{entryPoint}' listens for UDP.");
+        }
+    }
+
+    private static EndpointReference ResolveEndpoint(IResourceWithEndpoints resource, string? endpointName)
+    {
+        if (endpointName is not null)
+        {
+            var endpoint = resource.GetEndpoint(endpointName);
+            if (!endpoint.Exists)
+            {
+                throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.");
+            }
+
+            return endpoint;
+        }
+
+        var http = resource.GetEndpoint("http");
+        if (http.Exists)
+        {
+            return http;
+        }
+
+        var httpEndpoints = resource.Annotations.OfType<EndpointAnnotation>()
+            .Where(e => e.UriScheme is "http" or "https")
+            .ToList();
+
+        return httpEndpoints.Count switch
+        {
+            1 => resource.GetEndpoint(httpEndpoints[0].Name),
+            0 => throw new InvalidOperationException($"Resource '{resource.Name}' has no HTTP endpoint to route Traefik traffic to."),
+            _ => throw new InvalidOperationException($"Resource '{resource.Name}' has several HTTP endpoints and none is named 'http'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.EndpointName)} to choose one."),
+        };
+    }
+
+    private static List<TraefikMiddlewareResource> GetMiddlewares(IResource resource, string routerName, TraefikRouteAnnotation annotation, List<TraefikMiddlewareResource> resourceMiddlewares)
+    {
+        foreach (var middleware in annotation.Options.Middlewares)
+        {
+            if (middleware.Parent != annotation.Traefik)
+            {
+                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' goes through '{annotation.Traefik.Name}', but its middleware '{middleware.Name}' belongs to '{middleware.Parent.Name}'.");
+            }
+        }
+
+        // Resource-wide middlewares (usually authentication or security headers) run before the route's own ones
+        // (usually path rewrites), so they see the request as the client sent it. A middleware listed in both
+        // places runs once, at its first position.
+        var middlewares = resourceMiddlewares
+            .Where(m => m.Parent == annotation.Traefik)
+            .Concat(annotation.Options.Middlewares)
+            .Distinct()
+            .ToList();
+
+        if (annotation.Options.StripPathPrefix)
+        {
+            // Last, so the route's own middlewares still see the path the route matched on. The middleware only
+            // exists in Traefik's configuration, not as a resource.
+            var name = $"{routerName}-strip";
+            if (annotation.Traefik.Middlewares.Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException($"The Traefik route '{routerName}' of resource '{resource.Name}' strips its path prefix with a middleware named '{name}', but '{annotation.Traefik.Name}' already has a middleware with that name.");
+            }
+
+            var strip = new TraefikMiddlewareResource(name, TraefikMiddlewareTypesExtensions.StripPrefixType, annotation.Traefik);
+            // WithTraefikRoute only accepts StripPathPrefix with a path prefix.
+            strip.Options.Set("prefixes", new object[] { annotation.Options.PathPrefix! });
+            middlewares.Add(strip);
+        }
+
+        return middlewares;
     }
 
     private static void JoinExternalNetwork(DistributedApplicationModel model, List<TraefikMiddlewareResource> middlewares)
@@ -557,35 +483,143 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         }));
     }
 
-    private static EndpointReference ResolveEndpoint(IResourceWithEndpoints resource, string? endpointName)
+    /// <summary>
+    /// Resolves the TCP and UDP routes, like <see cref="ApplyRoutes"/> does for HTTP routes.
+    /// </summary>
+    private static void ApplyTransportRoutes(DistributedApplicationModel model, bool isPublishMode, bool publishesToDockerCompose)
     {
-        if (endpointName is not null)
+        // TCP and UDP routers live in their own namespaces in Traefik (`tcp.routers`, `udp.routers`), so a name only has
+        // to be unique within its protocol.
+        var routerNames = new Dictionary<(string Protocol, string Name), (IResource Owner, string Name)>(TransportRouterNameComparer.Instance);
+
+        foreach (var resource in model.Resources)
         {
-            var endpoint = resource.GetEndpoint(endpointName);
-            if (!endpoint.Exists)
+            var annotations = resource.Annotations
+                .Where(a => a is TraefikTcpRouteAnnotation or TraefikUdpRouteAnnotation)
+                .ToList();
+            if (annotations.Count == 0)
             {
-                throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.");
+                continue;
             }
 
-            return endpoint;
+            var resourceWithEndpoints = GetRoutedResource(resource);
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var routes = new List<TraefikTransportRoute>(annotations.Count);
+
+            foreach (var annotation in annotations)
+            {
+                var (traefik, tcp, entryPoint, endpointName, routerName) = annotation switch
+                {
+                    // WithTraefikTcpRoute requires an entry point, so it is set.
+                    TraefikTcpRouteAnnotation t => (t.Traefik, t.Options, t.Options.EntryPoint!, t.Options.EndpointName, t.Options.RouterName),
+                    TraefikUdpRouteAnnotation u => (u.Traefik, (TraefikTcpRouteOptions?)null, u.EntryPoint, u.EndpointName, (string?)null),
+                    _ => throw new UnreachableException(),
+                };
+
+                var protocol = TraefikTransportRoute.GetProtocol(tcp);
+                var index = counts[protocol] = counts.GetValueOrDefault(protocol) + 1;
+                routerName ??= index == 1 ? resource.Name : $"{resource.Name}-{index}";
+
+                ThrowIfInvalidRouterName(resource, routerName);
+
+                if (!routerNames.TryAdd((protocol, routerName), (resource, routerName)))
+                {
+                    var existing = routerNames[(protocol, routerName)];
+                    throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' of resource '{resource.Name}' clashes with '{existing.Name}' of '{existing.Owner.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
+                }
+
+                // An external Traefik's entry points and resolvers aren't known when published.
+                if (!isPublishMode || traefik.PublishExternal is null)
+                {
+                    ValidateEntryPoint(traefik, resource, routerName, entryPoint, protocol.ToUpperInvariant(), isUdp: tcp is null);
+
+                    if (tcp?.CertResolver is { } certResolver)
+                    {
+                        ValidateCertResolver(traefik, resource, routerName, certResolver, "TCP");
+                    }
+                }
+
+                var endpoint = ResolveTransportEndpoint(resourceWithEndpoints, endpointName, protocol);
+                var route = new TraefikTransportRoute(traefik, resourceWithEndpoints, routerName, endpoint, entryPoint, tcp);
+
+                traefik.TransportRoutes.Add(route);
+                routes.Add(route);
+
+                if (publishesToDockerCompose)
+                {
+                    if (resource is IResourceWithEnvironment resourceWithEnvironment)
+                    {
+                        TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), endpoint);
+                    }
+
+                    var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
+                    resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation(
+                        (composeService, service) => TraefikDockerLabels.Apply(composeService, service, route, defaults)));
+                }
+            }
+
+            if (!isPublishMode)
+            {
+                foreach (var traefik in routes.Select(r => r.Traefik).Distinct())
+                {
+                    if (!traefik.Annotations.OfType<ResourceRelationshipAnnotation>().Any(a => a.Resource == resource && a.Type == RouteRelationshipType))
+                    {
+                        traefik.Annotations.Add(new ResourceRelationshipAnnotation(resource, RouteRelationshipType));
+                    }
+                }
+            }
+        }
+    }
+
+    private static EndpointReference ResolveTransportEndpoint(IResourceWithEndpoints resource, string? endpointName, string protocol)
+    {
+        var endpoints = resource.Annotations.OfType<EndpointAnnotation>().ToList();
+        EndpointAnnotation annotation;
+
+        if (endpointName is not null)
+        {
+            annotation = endpoints.FirstOrDefault(e => string.Equals(e.Name, endpointName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.");
+        }
+        else if (endpoints.FirstOrDefault(e => string.Equals(e.Name, protocol, StringComparison.OrdinalIgnoreCase)) is { } named)
+        {
+            annotation = named;
+        }
+        else if (endpoints is [var single])
+        {
+            annotation = single;
+        }
+        else
+        {
+            var found = endpoints.Count == 0 ? "no endpoints" : $"several endpoints and none is named '{protocol}'";
+            throw new InvalidOperationException($"Resource '{resource.Name}' has {found}. Set the endpoint name of its Traefik {protocol.ToUpperInvariant()} route.");
         }
 
-        var http = resource.GetEndpoint("http");
-        if (http.Exists)
+        // A TCP route can target any TCP endpoint, including an HTTP one, but datagrams can only go to a UDP port.
+        var expected = protocol == TraefikTransportRoute.UdpProtocol ? ProtocolType.Udp : ProtocolType.Tcp;
+        if (annotation.Protocol != expected)
         {
-            return http;
+            throw new InvalidOperationException($"The endpoint '{annotation.Name}' of resource '{resource.Name}' uses {annotation.Protocol}, so it can't receive a Traefik {protocol.ToUpperInvariant()} route.");
         }
 
-        var httpEndpoints = resource.Annotations.OfType<EndpointAnnotation>()
-            .Where(e => e.UriScheme is "http" or "https")
-            .ToList();
+        return resource.GetEndpoint(annotation.Name);
+    }
 
-        return httpEndpoints.Count switch
+    private static void SetErrorPageServices(DistributedApplicationModel model)
+    {
+        foreach (var middleware in model.Resources.OfType<TraefikMiddlewareResource>())
         {
-            1 => resource.GetEndpoint(httpEndpoints[0].Name),
-            0 => throw new InvalidOperationException($"Resource '{resource.Name}' has no HTTP endpoint to route Traefik traffic to."),
-            _ => throw new InvalidOperationException($"Resource '{resource.Name}' has several HTTP endpoints and none is named 'http'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.EndpointName)} to choose one."),
-        };
+            if (middleware.ErrorPageResource is not { } errorPages)
+            {
+                continue;
+            }
+
+            // The service of a route has the router's name. The first route of the resource is used.
+            var route = middleware.Parent.Routes.FirstOrDefault(r => r.Resource == errorPages)
+                ?? throw new InvalidOperationException($"The Traefik middleware '{middleware.Name}' serves error pages from '{errorPages.Name}', which has no route through '{middleware.Parent.Name}'. Call WithTraefikRoute on it.");
+
+            middleware.Options.Set("service", route.RouterName);
+        }
     }
 
     /// <summary>
@@ -608,9 +642,13 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         public int GetHashCode(string obj) => TraefikNames.ToEnvironmentName(obj).GetHashCode(StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Compares TCP and UDP router names within their protocol, like <see cref="RouterNameComparer"/>.
+    /// </summary>
     private sealed class TransportRouterNameComparer : IEqualityComparer<(string Protocol, string Name)>
     {
-        // Compared like the HTTP router names in ApplyRoutes.
+        public static TransportRouterNameComparer Instance { get; } = new();
+
         public bool Equals((string Protocol, string Name) x, (string Protocol, string Name) y) =>
             x.Protocol == y.Protocol && RouterNameComparer.Instance.Equals(x.Name, y.Name);
 

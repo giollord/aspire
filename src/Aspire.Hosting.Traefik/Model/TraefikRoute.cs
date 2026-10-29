@@ -14,8 +14,16 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal interface ITraefikRouteTarget
 {
+    /// <summary>
+    /// Gets the name of the Traefik resource.
+    /// </summary>
     string Name { get; }
 
+    /// <summary>
+    /// Gets the entry point and TLS settings of the routes that don't set their own.
+    /// </summary>
+    /// <param name="isPublishMode">Whether the routes are for the published application.</param>
+    /// <returns>The defaults.</returns>
     TraefikRouteDefaults GetRouteDefaults(bool isPublishMode);
 }
 

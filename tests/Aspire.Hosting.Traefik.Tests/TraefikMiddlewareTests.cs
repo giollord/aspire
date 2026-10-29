@@ -82,14 +82,14 @@ public class TraefikMiddlewareTests(ITestOutputHelper testOutputHelper)
         var traefik = builder.AddTraefik("traefik");
 
         var exception = Assert.Throws<ArgumentException>(() => traefik.AddMiddleware("m", type));
-        Assert.Equal("type", exception.ParamName);
+        Assert.Equal($"The middleware type '{type}' is invalid. Use the type name from the Traefik documentation, for example 'stripPrefix'. (Parameter 'type')", exception.Message);
     }
 
     [Theory]
-    [InlineData("customRequestHeaders", "customRequestHeaders.X-Test")]
-    [InlineData("customRequestHeaders.X-Test", "customRequestHeaders")]
-    [InlineData("prefixes", "prefixes..x")]
-    public void WithOptionRejectsConflictingOrInvalidPaths(string first, string second)
+    [InlineData("customRequestHeaders", "customRequestHeaders.X-Test", "The option path 'customRequestHeaders.X-Test' conflicts with the value already set at 'customRequestHeaders'. (Parameter 'path')")]
+    [InlineData("customRequestHeaders.X-Test", "customRequestHeaders", "The option path 'customRequestHeaders' conflicts with the options already set below it. (Parameter 'path')")]
+    [InlineData("prefixes", "prefixes..x", "The option path 'prefixes..x' is invalid. Use names of letters, digits, '-' and '_', separated by '.'. (Parameter 'path')")]
+    public void WithOptionRejectsConflictingOrInvalidPaths(string first, string second, string message)
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
@@ -97,7 +97,7 @@ public class TraefikMiddlewareTests(ITestOutputHelper testOutputHelper)
             .WithOption(first, "value");
 
         var exception = Assert.Throws<ArgumentException>(() => middleware.WithOption(second, "value"));
-        Assert.Equal("path", exception.ParamName);
+        Assert.Equal(message, exception.Message);
     }
 
     [Fact]

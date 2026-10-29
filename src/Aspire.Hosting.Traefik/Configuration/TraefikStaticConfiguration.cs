@@ -38,6 +38,8 @@ internal static class TraefikStaticConfiguration
     /// <summary>
     /// Adds the static configuration of a managed Traefik as command-line arguments.
     /// </summary>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <param name="context">The context of the arguments callback, which the flags are added to.</param>
     public static void AddArguments(TraefikResource traefik, CommandLineArgsCallbackContext context)
     {
         var isPublishMode = context.ExecutionContext.IsPublishMode;
@@ -115,6 +117,17 @@ internal static class TraefikStaticConfiguration
         }
     }
 
+    /// <summary>
+    /// Gets the endpoint of an entry point as seen from the host, whose port is the one clients use.
+    /// </summary>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <param name="entryPointName">The entry point, whose endpoint has the same name.</param>
+    /// <returns>The endpoint, evaluated on the localhost network.</returns>
+    public static EndpointReference GetHostEndpoint(TraefikResource traefik, string entryPointName) =>
+        // Pin the localhost network so the value is the host port even when the expression is evaluated for a
+        // container (Traefik's own arguments, or another container's environment).
+        new(traefik, entryPointName, KnownNetworkIdentifiers.LocalhostNetwork);
+
     private static void AddEntryPoints(TraefikResource traefik, IList<object> args, bool isPublishMode)
     {
         args.Add(FormattableString.Invariant($"--entrypoints.{TraefikResource.WebEntryPointName}.address=:{TraefikResource.WebTargetPort}"));
@@ -133,14 +146,15 @@ internal static class TraefikStaticConfiguration
             args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}{(entryPoint.IsUdp ? "/udp" : "")}"));
         }
 
-        if (traefik.HasWebSecureEntryPoint)
+        // The `websecure` entry point exists exactly when a resolver does (see TraefikResource.HasWebSecureEntryPoint).
+        if (traefik.DefaultAcmeResolver is { } defaultResolver)
         {
             // TLS by default for every router on `websecure`, including routers that don't come from Aspire routes,
             // such as one added by hand to a provider. Aspire's own routes still set TLS on the router as well. As for
             // the routes, run mode uses the default certificate and publish time the ACME resolver.
             // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
             args.Add(isPublishMode
-                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={traefik.DefaultAcmeResolver!.Name}"
+                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={defaultResolver.Name}"
                 : $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls=true");
 
             if (isPublishMode)
@@ -167,6 +181,53 @@ internal static class TraefikStaticConfiguration
                 ? $"{redirectTo}{TraefikResource.WebSecureEntryPointName}"
                 : ReferenceExpression.Create($"{redirectTo}:{GetHostEndpoint(traefik, TraefikResource.WebSecureEntryPointName).Property(EndpointProperty.Port)}"));
             args.Add($"--entrypoints.{TraefikResource.WebEntryPointName}.http.redirections.entrypoint.scheme=https");
+        }
+    }
+
+    private static void AddTlsDomains(TraefikResource traefik, IList<object> args)
+    {
+        // The default resolver of the entry point requests one certificate per domain, covering its SANs, instead of
+        // one per router host. That is how a wildcard certificate is requested.
+        // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
+        for (var i = 0; i < traefik.TlsDomains.Count; i++)
+        {
+            var domain = traefik.TlsDomains[i];
+            var prefix = FormattableString.Invariant($"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.domains[{i}]");
+
+            args.Add(ReferenceExpression.Create($"{prefix}.main={domain.Main}"));
+
+            if (domain.Sans.Count > 0)
+            {
+                var sans = new ReferenceExpressionBuilder();
+                sans.AppendLiteral($"{prefix}.sans=");
+                for (var j = 0; j < domain.Sans.Count; j++)
+                {
+                    if (j > 0)
+                    {
+                        sans.AppendLiteral(",");
+                    }
+
+                    sans.AppendValueProvider(domain.Sans[j]);
+                }
+
+                args.Add(sans.Build());
+            }
+        }
+    }
+
+    private static void AddEntryPointMiddlewares(TraefikResource traefik, IList<object> args)
+    {
+        foreach (var (entryPoint, middlewares) in traefik.EntryPointMiddlewares)
+        {
+            if (!traefik.HasEntryPoint(entryPoint))
+            {
+                throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has middlewares for the entry point '{entryPoint}', which doesn't exist. Add it with WithEntryPoint, or WithLetsEncrypt for '{TraefikResource.WebSecureEntryPointName}'.");
+            }
+
+            // Static configuration references dynamic configuration, so the middlewares need their provider suffix.
+            // They are defined in the file provider in both modes (see TraefikDynamicConfiguration).
+            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-middlewares
+            args.Add($"--entrypoints.{entryPoint}.http.middlewares={string.Join(",", middlewares.Select(m => $"{m.Name}@file"))}");
         }
     }
 
@@ -212,29 +273,6 @@ internal static class TraefikStaticConfiguration
         }
     }
 
-    private static void AddEntryPointMiddlewares(TraefikResource traefik, IList<object> args)
-    {
-        foreach (var (entryPoint, middlewares) in traefik.EntryPointMiddlewares)
-        {
-            var exists = entryPoint switch
-            {
-                TraefikResource.WebEntryPointName => true,
-                TraefikResource.WebSecureEntryPointName => traefik.HasWebSecureEntryPoint,
-                _ => traefik.CustomEntryPoints.Any(e => e.Name == entryPoint),
-            };
-
-            if (!exists)
-            {
-                throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has middlewares for the entry point '{entryPoint}', which doesn't exist. Add it with WithEntryPoint, or WithLetsEncrypt for 'websecure'.");
-            }
-
-            // Static configuration references dynamic configuration, so the middlewares need their provider suffix.
-            // They are defined in the file provider in both modes (see TraefikDynamicConfiguration).
-            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-middlewares
-            args.Add($"--entrypoints.{entryPoint}.http.middlewares={string.Join(",", middlewares.Select(m => $"{m.Name}@file"))}");
-        }
-    }
-
     private static void AddProviders(IList<object> args, bool isPublishMode, bool hasPublishFileConfiguration)
     {
         if (isPublishMode)
@@ -253,6 +291,27 @@ internal static class TraefikStaticConfiguration
             // time the directory holds Traefik's own configuration, such as entry-point middlewares, when there is any.
             // https://doc.traefik.io/traefik/reference/install-configuration/providers/others/file/
             args.Add($"--providers.file.directory={TraefikResource.DynamicConfigurationDirectory}");
+        }
+    }
+
+    private static void ValidateTlsDomains(TraefikResource traefik)
+    {
+        // Checked in both modes, although the domains are only used at publish time, so a mistake shows up on
+        // `aspire run` already.
+        if (traefik.TlsDomains.Count == 0)
+        {
+            return;
+        }
+
+        if (traefik.DefaultAcmeResolver is not { } resolver)
+        {
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has TLS domains, but no certificate resolver is configured. Call WithLetsEncrypt.");
+        }
+
+        if (resolver.DnsChallenge is null && traefik.TlsDomains.Any(d => d.HasWildcard))
+        {
+            // https://letsencrypt.org/docs/challenge-types/#dns-01-challenge
+            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has a wildcard TLS domain, which Let's Encrypt only issues with the DNS-01 challenge. Call WithDnsChallenge for the resolver '{resolver.Name}'.");
         }
     }
 
@@ -310,58 +369,6 @@ internal static class TraefikStaticConfiguration
                 args.Add($"{prefix}.httpchallenge=true");
                 args.Add($"{prefix}.httpchallenge.entrypoint={TraefikResource.WebEntryPointName}");
                 break;
-        }
-    }
-
-    private static void ValidateTlsDomains(TraefikResource traefik)
-    {
-        // Checked in both modes, although the domains are only used at publish time, so a mistake shows up on
-        // `aspire run` already.
-        if (traefik.TlsDomains.Count == 0)
-        {
-            return;
-        }
-
-        if (traefik.DefaultAcmeResolver is not { } resolver)
-        {
-            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has TLS domains, but no certificate resolver is configured. Call WithLetsEncrypt.");
-        }
-
-        if (resolver.DnsChallenge is null && traefik.TlsDomains.Any(d => d.HasWildcard))
-        {
-            // https://letsencrypt.org/docs/challenge-types/#dns-01-challenge
-            throw new InvalidOperationException($"Traefik resource '{traefik.Name}' has a wildcard TLS domain, which Let's Encrypt only issues with the DNS-01 challenge. Call WithDnsChallenge for the resolver '{resolver.Name}'.");
-        }
-    }
-
-    private static void AddTlsDomains(TraefikResource traefik, IList<object> args)
-    {
-        // The default resolver of the entry point requests one certificate per domain, covering its SANs, instead of
-        // one per router host. That is how a wildcard certificate is requested.
-        // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
-        for (var i = 0; i < traefik.TlsDomains.Count; i++)
-        {
-            var domain = traefik.TlsDomains[i];
-            var prefix = FormattableString.Invariant($"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.domains[{i}]");
-
-            args.Add(ReferenceExpression.Create($"{prefix}.main={domain.Main}"));
-
-            if (domain.Sans.Count > 0)
-            {
-                var sans = new ReferenceExpressionBuilder();
-                sans.AppendLiteral($"{prefix}.sans=");
-                for (var j = 0; j < domain.Sans.Count; j++)
-                {
-                    if (j > 0)
-                    {
-                        sans.AppendLiteral(",");
-                    }
-
-                    sans.AppendValueProvider(domain.Sans[j]);
-                }
-
-                args.Add(sans.Build());
-            }
         }
     }
 
@@ -440,12 +447,4 @@ internal static class TraefikStaticConfiguration
         args.Add($"--metrics.otlp.servicename={traefik.Name}");
         args.Add("--metrics.otlp.addrouterslabels=true");
     }
-
-    /// <summary>
-    /// Gets the endpoint of an entry point as seen from the host, whose port is the one clients use.
-    /// </summary>
-    internal static EndpointReference GetHostEndpoint(TraefikResource traefik, string entryPointName) =>
-        // Pin the localhost network so the value is the host port even when the expression is evaluated for a
-        // container (Traefik's own arguments, or another container's environment).
-        new(traefik, entryPointName, KnownNetworkIdentifiers.LocalhostNetwork);
 }

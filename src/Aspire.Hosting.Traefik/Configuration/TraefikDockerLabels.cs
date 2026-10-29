@@ -39,6 +39,10 @@ internal static class TraefikDockerLabels
     /// <summary>
     /// Writes the labels of an HTTP route: its router, its service, and the middlewares it uses.
     /// </summary>
+    /// <param name="composeService">The Docker Compose service resource of the routed resource, which names the placeholders of parameters.</param>
+    /// <param name="service">The generated Docker Compose service the labels are added to.</param>
+    /// <param name="route">The HTTP route.</param>
+    /// <param name="defaults">The entry point, TLS, and network defaults of the route's Traefik.</param>
     public static void Apply(DockerComposeServiceResource composeService, Service service, TraefikRoute route, TraefikRouteDefaults defaults)
     {
         var labels = service.Labels;
@@ -130,6 +134,10 @@ internal static class TraefikDockerLabels
     /// A UDP router has no rule and no TLS. See
     /// <see href="https://doc.traefik.io/traefik/reference/routing-configuration/other-providers/docker/#tcp-routers"/>.
     /// </summary>
+    /// <param name="composeService">The Docker Compose service resource of the routed resource, which names the placeholders of parameters.</param>
+    /// <param name="service">The generated Docker Compose service the labels are added to.</param>
+    /// <param name="route">The TCP or UDP route.</param>
+    /// <param name="defaults">The TLS and network defaults of the route's Traefik.</param>
     public static void Apply(DockerComposeServiceResource composeService, Service service, TraefikTransportRoute route, TraefikRouteDefaults defaults)
     {
         var labels = service.Labels;
@@ -174,26 +182,13 @@ internal static class TraefikDockerLabels
         JoinNetwork(service, defaults);
     }
 
-    private static void JoinNetwork(Service service, TraefikRouteDefaults defaults)
-    {
-        if (defaults.Network is { } network)
-        {
-            // The external Traefik reaches the service over the shared network. A service on several networks
-            // needs `traefik.docker.network`, or Traefik may pick an address on a network it isn't attached to.
-            if (!service.Networks.Contains(network))
-            {
-                service.Networks.Add(network);
-            }
-
-            service.Labels["traefik.docker.network"] = network;
-        }
-    }
-
     /// <summary>
     /// The name of the temporary environment variable that carries a route's backend port from the Docker Compose
     /// publisher to the labels. See <see cref="AddTargetPortProbe"/>.
     /// </summary>
-    internal static string GetTargetPortVariableName(TraefikRoute route) =>
+    /// <param name="route">The HTTP route.</param>
+    /// <returns>The variable name, for example <c>ASPIRE_TRAEFIK_TARGET_PORT_API</c>.</returns>
+    public static string GetTargetPortVariableName(TraefikRoute route) =>
         $"{TargetPortVariablePrefix}{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
     /// <inheritdoc cref="GetTargetPortVariableName(TraefikRoute)"/>
@@ -201,12 +196,15 @@ internal static class TraefikDockerLabels
     /// The protocol is part of the name because TCP and UDP routers have their own namespaces, so their names can repeat
     /// an HTTP router's.
     /// </remarks>
-    internal static string GetTargetPortVariableName(TraefikTransportRoute route) =>
+    public static string GetTargetPortVariableName(TraefikTransportRoute route) =>
         $"{TargetPortVariablePrefix}{route.Protocol.ToUpperInvariant()}_{TraefikNames.ToEnvironmentName(route.RouterName)}";
 
     /// <summary>
     /// Adds an environment variable to the routed resource whose value is the target port of the route's endpoint.
     /// </summary>
+    /// <param name="resource">The routed resource.</param>
+    /// <param name="variableName">The variable name, from <c>GetTargetPortVariableName</c>.</param>
+    /// <param name="endpoint">The endpoint the route sends traffic to.</param>
     /// <remarks>
     /// The container port of a service is decided by the Docker Compose publisher: a fixed target port, a port it
     /// allocates for containers without one (for example <c>8000</c>), or a <c>${API_PORT}</c> placeholder for .NET
@@ -214,7 +212,7 @@ internal static class TraefikDockerLabels
     /// with it. So the port goes through an environment variable, which <see cref="Apply(DockerComposeServiceResource, Service, TraefikRoute, TraefikRouteDefaults)"/> reads back into the label
     /// and then removes from the service.
     /// </remarks>
-    internal static void AddTargetPortProbe(IResourceWithEnvironment resource, string variableName, EndpointReference endpoint)
+    public static void AddTargetPortProbe(IResourceWithEnvironment resource, string variableName, EndpointReference endpoint)
     {
         resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
         {
@@ -227,19 +225,24 @@ internal static class TraefikDockerLabels
     /// forward authentication address. In run mode Traefik itself gets these variables (see <c>AddTraefik</c>); at
     /// publish time the routed services do (see <see cref="AddMiddlewareValueProbes"/>).
     /// </summary>
-    internal static string GetMiddlewareValueVariableName(TraefikMiddlewareResource middleware, int index) =>
+    /// <param name="middleware">The middleware.</param>
+    /// <param name="index">The 1-based position of the value among the middleware's endpoint-referencing values.</param>
+    /// <returns>The variable name, for example <c>ASPIRE_TRAEFIK_MIDDLEWARE_SSO_1</c>.</returns>
+    public static string GetMiddlewareValueVariableName(TraefikMiddlewareResource middleware, int index) =>
         FormattableString.Invariant($"{MiddlewareValueVariablePrefix}{TraefikNames.ToEnvironmentName(middleware.Name)}_{index}");
 
     /// <summary>
     /// Adds environment variables to the routed resource whose values are the middleware options that reference
     /// endpoints, for example <c>http://sso-proxy:4180/</c>.
     /// </summary>
+    /// <param name="resource">The resource whose Docker Compose service gets the definitions of the middlewares.</param>
+    /// <param name="middlewares">The middlewares.</param>
     /// <remarks>
     /// As with <see cref="AddTargetPortProbe"/>, the Docker Compose publisher's mapping from an endpoint to a service
     /// address isn't public, but it resolves endpoint references in environment variables. <see cref="Apply(DockerComposeServiceResource, Service, TraefikRoute, TraefikRouteDefaults)"/> reads the
     /// values back into the labels, and <see cref="RemoveProbes"/> removes the variables afterwards.
     /// </remarks>
-    internal static void AddMiddlewareValueProbes(IResourceWithEnvironment resource, IEnumerable<TraefikMiddlewareResource> middlewares)
+    public static void AddMiddlewareValueProbes(IResourceWithEnvironment resource, IEnumerable<TraefikMiddlewareResource> middlewares)
     {
         var probes = middlewares.SelectMany(GetMiddlewareValueProbes).ToList();
         if (probes.Count == 0)
@@ -259,7 +262,8 @@ internal static class TraefikDockerLabels
     /// <summary>
     /// Removes the middleware value variables once every route of the service has its labels.
     /// </summary>
-    internal static void RemoveProbes(Service service)
+    /// <param name="service">The generated Docker Compose service.</param>
+    public static void RemoveProbes(Service service)
     {
         foreach (var name in service.Environment.Keys.Where(k => k.StartsWith(MiddlewareValueVariablePrefix, StringComparison.Ordinal)).ToList())
         {
@@ -270,32 +274,22 @@ internal static class TraefikDockerLabels
     /// <summary>
     /// Gets the temporary environment variable that carries each endpoint-referencing value of a middleware's options.
     /// </summary>
-    internal static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
+    /// <param name="middleware">The middleware.</param>
+    /// <returns>The variable name of each value, keyed by the expression object.</returns>
+    public static Dictionary<ReferenceExpression, string> GetMiddlewareValueProbes(TraefikMiddlewareResource middleware) =>
         middleware.Options.GetEndpointExpressions()
             .Select((expression, i) => (expression, variable: GetMiddlewareValueVariableName(middleware, i + 1)))
             // Options hold the expression objects themselves, so they are matched by reference.
             .ToDictionary(p => p.expression, p => p.variable, (IEqualityComparer<ReferenceExpression>)ReferenceEqualityComparer.Instance);
 
-    private static string GetTargetPort(Service service, string variableName, EndpointReference endpoint, string routerName)
-    {
-        if (service.Environment.Remove(variableName, out var port) && !string.IsNullOrEmpty(port))
-        {
-            return port;
-        }
-
-        if (endpoint.EndpointAnnotation.TargetPort is int targetPort)
-        {
-            return targetPort.ToString(CultureInfo.InvariantCulture);
-        }
-
-        throw new InvalidOperationException($"The container port of endpoint '{endpoint.EndpointName}' on resource '{endpoint.Resource.Name}' can't be determined for the Traefik route '{routerName}'.");
-    }
-
     /// <summary>
     /// Renders <paramref name="expression"/> for a Docker Compose file: parameter references become <c>${VAR}</c>
     /// placeholders whose values are written to <c>.env</c>, and literal text is escaped.
     /// </summary>
-    internal static string ToComposeExpression(DockerComposeServiceResource composeService, ReferenceExpression expression)
+    /// <param name="composeService">The Docker Compose service resource the value is written for, which names the placeholders.</param>
+    /// <param name="expression">The expression.</param>
+    /// <returns>The text for the compose file.</returns>
+    public static string ToComposeExpression(DockerComposeServiceResource composeService, ReferenceExpression expression)
     {
         if (expression.IsConditional)
         {
@@ -319,5 +313,37 @@ internal static class TraefikDockerLabels
     /// <summary>
     /// Escapes <c>$</c> as <c>$$</c>, so Docker Compose doesn't interpolate a literal value.
     /// </summary>
-    internal static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
+    /// <param name="value">Literal text.</param>
+    /// <returns>The text with every <c>$</c> doubled.</returns>
+    public static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
+
+    private static string GetTargetPort(Service service, string variableName, EndpointReference endpoint, string routerName)
+    {
+        if (service.Environment.Remove(variableName, out var port) && !string.IsNullOrEmpty(port))
+        {
+            return port;
+        }
+
+        if (endpoint.EndpointAnnotation.TargetPort is int targetPort)
+        {
+            return targetPort.ToString(CultureInfo.InvariantCulture);
+        }
+
+        throw new InvalidOperationException($"The container port of endpoint '{endpoint.EndpointName}' on resource '{endpoint.Resource.Name}' can't be determined for the Traefik route '{routerName}'.");
+    }
+
+    private static void JoinNetwork(Service service, TraefikRouteDefaults defaults)
+    {
+        if (defaults.Network is { } network)
+        {
+            // The external Traefik reaches the service over the shared network. A service on several networks
+            // needs `traefik.docker.network`, or Traefik may pick an address on a network it isn't attached to.
+            if (!service.Networks.Contains(network))
+            {
+                service.Networks.Add(network);
+            }
+
+            service.Labels["traefik.docker.network"] = network;
+        }
+    }
 }

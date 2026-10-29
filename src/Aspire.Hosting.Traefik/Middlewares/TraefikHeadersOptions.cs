@@ -103,6 +103,7 @@ public sealed class TraefikHeadersOptions
     /// <summary>
     /// Sets the options that have a value on the middleware. Unset options keep Traefik's defaults.
     /// </summary>
+    /// <param name="options">The options of the middleware the values are written to.</param>
     internal void ApplyTo(TraefikOptionMap options)
     {
         foreach (var (name, value) in CustomRequestHeaders)
@@ -115,36 +116,20 @@ public sealed class TraefikHeadersOptions
             options.Set($"customResponseHeaders.{name}", value);
         }
 
-        SetList(options, "accessControlAllowOriginList", AccessControlAllowOriginList);
-        SetList(options, "accessControlAllowMethods", AccessControlAllowMethods);
-        SetList(options, "accessControlAllowHeaders", AccessControlAllowHeaders);
-        SetList(options, "accessControlExposeHeaders", AccessControlExposeHeaders);
-        Set(options, "accessControlAllowCredentials", AccessControlAllowCredentials);
-        Set(options, "accessControlMaxAge", AccessControlMaxAge);
-        Set(options, "stsSeconds", StsSeconds);
-        Set(options, "stsIncludeSubdomains", StsIncludeSubdomains);
-        Set(options, "stsPreload", StsPreload);
-        Set(options, "frameDeny", FrameDeny);
-        Set(options, "customFrameOptionsValue", CustomFrameOptionsValue);
-        Set(options, "contentTypeNosniff", ContentTypeNosniff);
-        Set(options, "referrerPolicy", ReferrerPolicy);
-        Set(options, "contentSecurityPolicy", ContentSecurityPolicy);
-        Set(options, "permissionsPolicy", PermissionsPolicy);
-    }
-
-    private static void SetList(TraefikOptionMap options, string path, IList<string> values)
-    {
-        if (values.Count > 0)
-        {
-            options.Set(path, values.Cast<object>().ToArray());
-        }
-    }
-
-    private static void Set(TraefikOptionMap options, string path, object? value)
-    {
-        if (value is not null)
-        {
-            options.Set(path, value);
-        }
+        options.SetIfNotEmpty("accessControlAllowOriginList", AccessControlAllowOriginList);
+        options.SetIfNotEmpty("accessControlAllowMethods", AccessControlAllowMethods);
+        options.SetIfNotEmpty("accessControlAllowHeaders", AccessControlAllowHeaders);
+        options.SetIfNotEmpty("accessControlExposeHeaders", AccessControlExposeHeaders);
+        options.SetIfNotNull("accessControlAllowCredentials", AccessControlAllowCredentials);
+        options.SetIfNotNull("accessControlMaxAge", AccessControlMaxAge);
+        options.SetIfNotNull("stsSeconds", StsSeconds);
+        options.SetIfNotNull("stsIncludeSubdomains", StsIncludeSubdomains);
+        options.SetIfNotNull("stsPreload", StsPreload);
+        options.SetIfNotNull("frameDeny", FrameDeny);
+        options.SetIfNotNull("customFrameOptionsValue", CustomFrameOptionsValue);
+        options.SetIfNotNull("contentTypeNosniff", ContentTypeNosniff);
+        options.SetIfNotNull("referrerPolicy", ReferrerPolicy);
+        options.SetIfNotNull("contentSecurityPolicy", ContentSecurityPolicy);
+        options.SetIfNotNull("permissionsPolicy", PermissionsPolicy);
     }
 }

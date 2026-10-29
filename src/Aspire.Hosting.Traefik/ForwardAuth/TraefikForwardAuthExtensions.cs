@@ -11,12 +11,17 @@ namespace Aspire.Hosting;
 /// </summary>
 public static class TraefikForwardAuthExtensions
 {
-    // A priority above the default (the rule length) of any realistic rule, so `/oauth2/*` on a protected host always
-    // reaches oauth2-proxy rather than the protected backend.
+    /// <summary>
+    /// The priority of the sign-in routes: above the default (the rule length) of any realistic rule, so
+    /// <c>/oauth2/*</c> on a protected host always reaches oauth2-proxy rather than the protected backend.
+    /// </summary>
     internal const int SignInRoutePriority = 1_000_000;
 
-    // oauth2-proxy serves its sign-in, callback, and sign-out pages under this path, the default of --proxy-prefix.
-    // https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options
+    /// <summary>
+    /// The path oauth2-proxy serves its sign-in, callback, and sign-out pages under, the default of
+    /// <c>--proxy-prefix</c>. See
+    /// <see href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options"/>.
+    /// </summary>
     internal const string OAuth2ProxyPrefix = "/oauth2";
 
     private const int OAuth2ProxyPort = 4180;
@@ -59,13 +64,9 @@ public static class TraefikForwardAuthExtensions
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal addForwardAuth export, which accepts an endpoint, a string, or a reference expression.")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, EndpointReference endpoint, string path = "/", Action<TraefikForwardAuthOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(endpoint);
-        ArgumentException.ThrowIfNullOrEmpty(path);
-
-        if (!path.StartsWith('/'))
-        {
-            throw new ArgumentException($"The path '{path}' must start with '/'.", nameof(path));
-        }
+        TraefikNames.ThrowIfInvalidPath(path, "path", nameof(path));
 
         return builder.AddForwardAuth(name, ReferenceExpression.Create($"{endpoint}{path}"), configure)
             .WithRelationship(endpoint.Resource, "ForwardAuth");
@@ -82,6 +83,7 @@ public static class TraefikForwardAuthExtensions
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal addForwardAuth export, which accepts an endpoint, a string, or a reference expression.")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, ReferenceExpression address, Action<TraefikForwardAuthOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(address);
 
         var options = new TraefikForwardAuthOptions();
@@ -112,6 +114,7 @@ public static class TraefikForwardAuthExtensions
     [AspireExportIgnore(Reason = "Polyglot AppHosts use the internal addForwardAuth export, which accepts an endpoint, a string, or a reference expression.")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string address, Action<TraefikForwardAuthOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
         if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
@@ -120,40 +123,6 @@ public static class TraefikForwardAuthExtensions
         }
 
         return builder.AddForwardAuth(name, ReferenceExpression.Create($"{address}"), configure);
-    }
-
-    /// <summary>
-    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
-    /// </summary>
-    /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="name">The name of the middleware.</param>
-    /// <param name="address">
-    /// The authentication server: an endpoint of a resource in the application, an absolute URL, or a reference expression
-    /// that builds the URL.
-    /// </param>
-    /// <param name="path">The path of the authentication request on an endpoint, for example <c>/verify</c>. Only valid with an endpoint.</param>
-    /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
-    /// <returns>A reference to the middleware's resource builder.</returns>
-    /// <remarks>
-    /// A <c>2xx</c> response lets the request through; any other response, for example a redirect to a sign-in page, is
-    /// returned to the client.
-    /// </remarks>
-    [AspireExport("addForwardAuth", RunSyncOnBackgroundThread = true)]
-    internal static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuthPolyglot(
-        this IResourceBuilder<TraefikResource> builder,
-        [ResourceName] string name,
-        [AspireUnion(typeof(EndpointReference), typeof(string), typeof(ReferenceExpression))] object address,
-        string? path = null,
-        Action<TraefikForwardAuthOptions>? configure = null)
-    {
-        return address switch
-        {
-            EndpointReference endpoint => builder.AddForwardAuth(name, endpoint, path ?? "/", configure),
-            string url when path is null => builder.AddForwardAuth(name, url, configure),
-            ReferenceExpression expression when path is null => builder.AddForwardAuth(name, expression, configure),
-            string or ReferenceExpression => throw new ArgumentException("A path can only be given with an endpoint address.", nameof(path)),
-            _ => throw new ArgumentException($"Unsupported address type '{address?.GetType().Name}'. Expected an endpoint, a string, or a reference expression.", nameof(address)),
-        };
     }
 
     /// <summary>
@@ -191,6 +160,8 @@ public static class TraefikForwardAuthExtensions
         Action<TraefikOAuth2ProxyOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        TraefikNames.ThrowIfInvalidName(name, "middleware name", nameof(name));
         ArgumentNullException.ThrowIfNull(issuerUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
         ArgumentNullException.ThrowIfNull(clientSecret);
@@ -259,7 +230,7 @@ public static class TraefikForwardAuthExtensions
             args.Add("--code-challenge-method=S256");
 
             var isSecure = ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure;
-            args.Add($"--cookie-secure={(isSecure ? "true" : "false")}");
+            args.Add($"--cookie-secure={TraefikNames.ToLiteral(isSecure)}");
 
             foreach (var domain in options.AllowedEmailDomains.DefaultIfEmpty("*"))
             {
@@ -354,8 +325,12 @@ public static class TraefikForwardAuthExtensions
         bool configureHostname = true)
         where TKeycloak : class, IResourceWithEndpoints, IResourceWithEnvironment
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(keycloak);
         ArgumentException.ThrowIfNullOrWhiteSpace(realm);
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
+        ArgumentNullException.ThrowIfNull(clientSecret);
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointName);
 
         if (!keycloak.Resource.Annotations.OfType<TraefikRouteAnnotation>().Any())
@@ -368,16 +343,6 @@ public static class TraefikForwardAuthExtensions
         if (!internalEndpoint.Exists)
         {
             throw new InvalidOperationException($"Keycloak resource '{keycloak.Resource.Name}' has no endpoint named '{endpointName}'.");
-        }
-
-        if (configureHostname)
-        {
-            // https://www.keycloak.org/server/hostname and https://www.keycloak.org/server/reverseproxy
-            keycloak
-                .WithEnvironment("KC_HOSTNAME", publicUrl)
-                .WithEnvironment("KC_HOSTNAME_BACKCHANNEL_DYNAMIC", "true")
-                .WithEnvironment("KC_PROXY_HEADERS", "xforwarded")
-                .WithEnvironment("KC_HTTP_ENABLED", "true");
         }
 
         var issuer = ReferenceExpression.Create($"{publicUrl}/realms/{realm}");
@@ -393,9 +358,55 @@ public static class TraefikForwardAuthExtensions
             configure?.Invoke(options);
         });
 
+        // AddOAuth2ProxyForwardAuth always sets the container.
         builder.ApplicationBuilder.CreateResourceBuilder(middleware.Resource.OAuth2Proxy!)
             .WaitFor(keycloak);
 
+        // Last, so a failure above leaves Keycloak unchanged.
+        if (configureHostname)
+        {
+            // https://www.keycloak.org/server/hostname and https://www.keycloak.org/server/reverseproxy
+            keycloak
+                .WithEnvironment("KC_HOSTNAME", publicUrl)
+                .WithEnvironment("KC_HOSTNAME_BACKCHANNEL_DYNAMIC", "true")
+                .WithEnvironment("KC_PROXY_HEADERS", "xforwarded")
+                .WithEnvironment("KC_HTTP_ENABLED", "true");
+        }
+
         return middleware;
+    }
+
+    /// <summary>
+    /// Adds a <c>forwardAuth</c> middleware that asks an authentication server whether a request may pass.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="name">The name of the middleware.</param>
+    /// <param name="address">
+    /// The authentication server: an endpoint of a resource in the application, an absolute URL, or a reference expression
+    /// that builds the URL.
+    /// </param>
+    /// <param name="path">The path of the authentication request on an endpoint, for example <c>/verify</c>. Only valid with an endpoint.</param>
+    /// <param name="configure">Sets more options, such as the response headers copied to the forwarded request.</param>
+    /// <returns>A reference to the middleware's resource builder.</returns>
+    /// <remarks>
+    /// A <c>2xx</c> response lets the request through; any other response, for example a redirect to a sign-in page, is
+    /// returned to the client.
+    /// </remarks>
+    [AspireExport("addForwardAuth", RunSyncOnBackgroundThread = true)]
+    internal static IResourceBuilder<TraefikMiddlewareResource> AddForwardAuthPolyglot(
+        this IResourceBuilder<TraefikResource> builder,
+        [ResourceName] string name,
+        [AspireUnion(typeof(EndpointReference), typeof(string), typeof(ReferenceExpression))] object address,
+        string? path = null,
+        Action<TraefikForwardAuthOptions>? configure = null)
+    {
+        return address switch
+        {
+            EndpointReference endpoint => builder.AddForwardAuth(name, endpoint, path ?? "/", configure),
+            string url when path is null => builder.AddForwardAuth(name, url, configure),
+            ReferenceExpression expression when path is null => builder.AddForwardAuth(name, expression, configure),
+            string or ReferenceExpression => throw new ArgumentException("A path can only be given with an endpoint address.", nameof(path)),
+            _ => throw new ArgumentException($"Unsupported type '{address?.GetType().Name}'. Expected an endpoint, a string, or a reference expression.", nameof(address)),
+        };
     }
 }

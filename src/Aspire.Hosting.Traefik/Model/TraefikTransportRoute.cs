@@ -40,5 +40,7 @@ internal sealed record TraefikTransportRoute(
     /// <summary>
     /// Gets the protocol of a route from its TCP options, which only TCP routes have.
     /// </summary>
+    /// <param name="tcp">The TCP options of the route, or <see langword="null"/> for a UDP route.</param>
+    /// <returns><see cref="TcpProtocol"/> or <see cref="UdpProtocol"/>.</returns>
     public static string GetProtocol(TraefikTcpRouteOptions? tcp) => tcp is null ? UdpProtocol : TcpProtocol;
 }

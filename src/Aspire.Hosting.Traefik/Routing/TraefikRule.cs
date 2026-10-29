@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Hosting.Traefik;
+
 namespace Aspire.Hosting.ApplicationModel;
 
 /// <summary>
@@ -47,14 +49,6 @@ public sealed class TraefikRule
     /// <inheritdoc cref="Host(string)"/>
     /// <param name="host">The host name. It can reference parameters, for example <c>ReferenceExpression.Create($"api.{domain}")</c>.</param>
     public static TraefikRule Host(ReferenceExpression host) => Matcher(nameof(Host), host);
-
-    // TCP routers have their own matchers. Only HostSNI is needed, for TraefikTcpRouteOptions, so it isn't public: TCP
-    // and HTTP matchers can't be mixed in one rule.
-    // https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/
-    internal static TraefikRule HostSni(ReferenceExpression host) => Matcher("HostSNI", host);
-
-    // Matches every TCP connection, including plain TCP without a server name.
-    internal static TraefikRule AnyHostSni() => Matcher("HostSNI", "*");
 
     /// <summary>Matches requests whose host name matches a regular expression.</summary>
     /// <param name="regex">The regular expression, in Go syntax.</param>
@@ -149,8 +143,27 @@ public sealed class TraefikRule
     public TraefikRule Not() => !this;
 
     /// <summary>
+    /// Matches TLS connections by server name (SNI), for TCP routes.
+    /// </summary>
+    /// <remarks>
+    /// TCP routers have their own matchers. Only HostSNI is needed, for <see cref="TraefikTcpRouteOptions"/>, so it isn't
+    /// public: TCP and HTTP matchers can't be mixed in one rule. See
+    /// <see href="https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/"/>.
+    /// </remarks>
+    /// <param name="host">The server name.</param>
+    /// <returns>The matcher.</returns>
+    internal static TraefikRule HostSni(ReferenceExpression host) => Matcher("HostSNI", host);
+
+    /// <summary>
+    /// Matches every TCP connection, including plain TCP without a server name.
+    /// </summary>
+    /// <returns>The matcher.</returns>
+    internal static TraefikRule AnyHostSni() => Matcher("HostSNI", "*");
+
+    /// <summary>
     /// Appends the rule in Traefik's syntax, keeping expression values as value providers so parameters resolve per mode.
     /// </summary>
+    /// <param name="builder">The builder the rule is appended to.</param>
     internal void WriteTo(ReferenceExpressionBuilder builder)
     {
         if (_matcher is not null)
@@ -194,43 +207,6 @@ public sealed class TraefikRule
         }
     }
 
-    private static void WriteOperand(ReferenceExpressionBuilder builder, TraefikRule operand, bool parenthesize)
-    {
-        if (parenthesize)
-        {
-            builder.AppendLiteral("(");
-        }
-
-        operand.WriteTo(builder);
-
-        if (parenthesize)
-        {
-            builder.AppendLiteral(")");
-        }
-    }
-
-    private static TraefikRule Combine(string @operator, TraefikRule left, TraefikRule right)
-    {
-        ArgumentNullException.ThrowIfNull(left);
-        ArgumentNullException.ThrowIfNull(right);
-
-        // Flatten chains of the same operator, so `a & b & c` renders without nested parentheses.
-        var operands = new List<TraefikRule>();
-        foreach (var operand in (TraefikRule[])[left, right])
-        {
-            if (operand._operator == @operator)
-            {
-                operands.AddRange(operand._operands);
-            }
-            else
-            {
-                operands.Add(operand);
-            }
-        }
-
-        return new(@operator, operands.ToArray());
-    }
-
     private static TraefikRule Matcher(string matcher, params object[] arguments)
     {
         foreach (var argument in arguments)
@@ -252,13 +228,45 @@ public sealed class TraefikRule
 
     private static string RequirePath(string path, string parameterName)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path, parameterName);
-
-        if (!path.StartsWith('/'))
-        {
-            throw new ArgumentException($"The path '{path}' must start with '/'.", parameterName);
-        }
+        TraefikNames.ThrowIfInvalidPath(path, "path", parameterName);
 
         return path;
+    }
+
+    private static TraefikRule Combine(string @operator, TraefikRule left, TraefikRule right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        // Flatten chains of the same operator, so `a & b & c` renders without nested parentheses.
+        var operands = new List<TraefikRule>();
+        foreach (var operand in (TraefikRule[])[left, right])
+        {
+            if (operand._operator == @operator)
+            {
+                operands.AddRange(operand._operands);
+            }
+            else
+            {
+                operands.Add(operand);
+            }
+        }
+
+        return new(@operator, [.. operands]);
+    }
+
+    private static void WriteOperand(ReferenceExpressionBuilder builder, TraefikRule operand, bool parenthesize)
+    {
+        if (parenthesize)
+        {
+            builder.AppendLiteral("(");
+        }
+
+        operand.WriteTo(builder);
+
+        if (parenthesize)
+        {
+            builder.AppendLiteral(")");
+        }
     }
 }

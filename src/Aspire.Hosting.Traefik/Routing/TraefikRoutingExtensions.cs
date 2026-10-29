@@ -38,6 +38,8 @@ public static class TraefikRoutingExtensions
     public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, string host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
         where T : IResourceWithEndpoints
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(traefik);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
         return builder.WithTraefikRoute(traefik, ReferenceExpression.Create($"{host}"), middlewares);
@@ -62,8 +64,15 @@ public static class TraefikRoutingExtensions
     public static IResourceBuilder<T> WithTraefikRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, ReferenceExpression host, params IResourceBuilder<TraefikMiddlewareResource>[] middlewares)
         where T : IResourceWithEndpoints
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(traefik);
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(middlewares);
+
+        foreach (var middleware in middlewares)
+        {
+            ArgumentNullException.ThrowIfNull(middleware, nameof(middlewares));
+        }
 
         return builder.WithTraefikRoute(traefik, options =>
         {
@@ -71,41 +80,9 @@ public static class TraefikRoutingExtensions
 
             foreach (var middleware in middlewares)
             {
-                ArgumentNullException.ThrowIfNull(middleware, nameof(middlewares));
                 options.Middlewares.Add(middleware.Resource);
             }
         });
-    }
-
-    /// <summary>
-    /// Routes HTTP requests for <paramref name="host"/> through <paramref name="traefik"/> to this resource.
-    /// </summary>
-    /// <typeparam name="T">The type of the routed resource.</typeparam>
-    /// <param name="builder">The builder of the routed resource.</param>
-    /// <param name="traefik">The Traefik resource that receives the requests.</param>
-    /// <param name="host">The host name to match, for example <c>api.dev.localhost</c>. It can reference parameters.</param>
-    /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
-    /// <returns>A reference to the routed resource builder.</returns>
-    /// <remarks>
-    /// Requests go to the resource's <c>http</c> endpoint. Use <c>withTraefikRouteOptions</c> to choose another endpoint,
-    /// match a path prefix, or name the router. A resource can have several routes.
-    /// </remarks>
-    [AspireExport("withTraefikRoute")]
-    internal static IResourceBuilder<T> WithTraefikRoutePolyglot<T>(
-        this IResourceBuilder<T> builder,
-        IResourceBuilder<TraefikResource> traefik,
-        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object host,
-        IResourceBuilder<TraefikMiddlewareResource>[]? middlewares = null)
-        where T : IResourceWithEndpoints
-    {
-        middlewares ??= [];
-
-        return host switch
-        {
-            string value => builder.WithTraefikRoute(traefik, value, middlewares),
-            ReferenceExpression expression => builder.WithTraefikRoute(traefik, expression, middlewares),
-            _ => throw new ArgumentException($"Unsupported host type '{host?.GetType().Name}'. Expected a string or a reference expression.", nameof(host)),
-        };
     }
 
     /// <summary>
@@ -145,56 +122,11 @@ public static class TraefikRoutingExtensions
         }
 
         ValidateServiceOptions(options, nameof(configure));
-
-        try
-        {
-            // Build the rule once now so invalid values fail where the route is declared, not at startup.
-            TraefikRouteRule.Build(options);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new ArgumentException(ex.Message, nameof(configure), ex);
-        }
+        ValidateRule(() => TraefikRouteRule.Build(options), nameof(configure));
 
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
 
-        return builder.WithAnnotation(new TraefikRouteAnnotation(traefik.Resource, options), ResourceAnnotationMutationBehavior.Append);
-    }
-
-    private static void ValidateServiceOptions(TraefikRouteOptions options, string parameterName)
-    {
-        if (options.HealthCheck is { } healthCheck)
-        {
-            if (string.IsNullOrEmpty(healthCheck.Path) || !healthCheck.Path.StartsWith('/'))
-            {
-                throw new ArgumentException($"The health check path '{healthCheck.Path}' must start with '/'.", parameterName);
-            }
-
-            if (healthCheck.IntervalSeconds <= 0 || healthCheck.TimeoutSeconds <= 0)
-            {
-                throw new ArgumentException("The health check interval and timeout must be positive.", parameterName);
-            }
-
-            if (healthCheck.Status is < 100 or > 599)
-            {
-                throw new ArgumentException($"The health check status {healthCheck.Status} isn't an HTTP status code.", parameterName);
-            }
-        }
-
-        if (options.StickySession is { } sticky)
-        {
-            // A cookie name is an RFC 6265 token: no spaces, separators, or `=`.
-            // https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1
-            if (sticky.CookieName is { } name && (name.Length == 0 || name.Any(c => c <= ' ' || c >= 127 || "()<>@,;:\\\"/[]?={}".Contains(c))))
-            {
-                throw new ArgumentException($"The sticky session cookie name '{name}' is invalid.", parameterName);
-            }
-
-            if (sticky.MaxAgeSeconds <= 0)
-            {
-                throw new ArgumentException("The sticky session cookie max age must be positive.", parameterName);
-            }
-        }
+        return builder.WithAnnotation(new TraefikRouteAnnotation(traefik.Resource, options, isSignInRoute: false), ResourceAnnotationMutationBehavior.Append);
     }
 
     /// <summary>
@@ -223,6 +155,8 @@ public static class TraefikRoutingExtensions
     public static IResourceBuilder<T> WithTraefikTcpRoute<T>(this IResourceBuilder<T> builder, IResourceBuilder<TraefikResource> traefik, string entryPoint, string? endpointName = null)
         where T : IResourceWithEndpoints
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(traefik);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
 
         return builder.WithTraefikTcpRoute(traefik, options =>
@@ -290,15 +224,7 @@ public static class TraefikRoutingExtensions
             throw new ArgumentException($"A certificate resolver needs {nameof(TraefikTcpRouteOptions.Tls)}: with TLS passthrough or plain TCP, Traefik presents no certificate.", nameof(configure));
         }
 
-        try
-        {
-            // Build the rule once now so invalid values fail where the route is declared, not at startup.
-            TraefikRouteRule.Build(options);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new ArgumentException(ex.Message, nameof(configure), ex);
-        }
+        ValidateRule(() => TraefikRouteRule.Build(options), nameof(configure));
 
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
 
@@ -371,5 +297,89 @@ public static class TraefikRoutingExtensions
             ?? throw new InvalidOperationException($"Resource '{builder.Resource.Name}' has no Traefik route. Call WithTraefikRoute first.");
 
         return TraefikUrls.Build(annotation.Traefik, annotation.Options, builder.ApplicationBuilder.ExecutionContext.IsPublishMode);
+    }
+
+    /// <summary>
+    /// Routes HTTP requests for <paramref name="host"/> through <paramref name="traefik"/> to this resource.
+    /// </summary>
+    /// <typeparam name="T">The type of the routed resource.</typeparam>
+    /// <param name="builder">The builder of the routed resource.</param>
+    /// <param name="traefik">The Traefik resource that receives the requests.</param>
+    /// <param name="host">The host name to match, for example <c>api.dev.localhost</c>. It can reference parameters.</param>
+    /// <param name="middlewares">Middlewares that apply to this route only, in the order Traefik runs them.</param>
+    /// <returns>A reference to the routed resource builder.</returns>
+    /// <remarks>
+    /// Requests go to the resource's <c>http</c> endpoint. Use <c>withTraefikRouteOptions</c> to choose another endpoint,
+    /// match a path prefix, or name the router. A resource can have several routes.
+    /// </remarks>
+    [AspireExport("withTraefikRoute")]
+    internal static IResourceBuilder<T> WithTraefikRoutePolyglot<T>(
+        this IResourceBuilder<T> builder,
+        IResourceBuilder<TraefikResource> traefik,
+        [AspireUnion(typeof(string), typeof(ReferenceExpression))] object host,
+        IResourceBuilder<TraefikMiddlewareResource>[]? middlewares = null)
+        where T : IResourceWithEndpoints
+    {
+        middlewares ??= [];
+
+        return host switch
+        {
+            string value => builder.WithTraefikRoute(traefik, value, middlewares),
+            ReferenceExpression expression => builder.WithTraefikRoute(traefik, expression, middlewares),
+            _ => throw new ArgumentException($"Unsupported type '{host?.GetType().Name}'. Expected a string or a reference expression.", nameof(host)),
+        };
+    }
+
+    private static void ValidateServiceOptions(TraefikRouteOptions options, string parameterName)
+    {
+        if (options.HealthCheck is { } healthCheck)
+        {
+            if (string.IsNullOrEmpty(healthCheck.Path) || !healthCheck.Path.StartsWith('/'))
+            {
+                throw new ArgumentException($"The health check path '{healthCheck.Path}' must start with '/'.", parameterName);
+            }
+
+            if (healthCheck.IntervalSeconds <= 0 || healthCheck.TimeoutSeconds <= 0)
+            {
+                throw new ArgumentException("The health check interval and timeout must be positive.", parameterName);
+            }
+
+            if (healthCheck.Status is < 100 or > 599)
+            {
+                throw new ArgumentException($"The health check status {healthCheck.Status} isn't an HTTP status code.", parameterName);
+            }
+        }
+
+        if (options.StickySession is { } sticky)
+        {
+            // A cookie name is an RFC 6265 token: no spaces, separators, or `=`.
+            // https://www.rfc-editor.org/rfc/rfc6265#section-4.1.1
+            if (sticky.CookieName is { } name && (name.Length == 0 || name.Any(c => c <= ' ' || c >= 127 || "()<>@,;:\\\"/[]?={}".Contains(c))))
+            {
+                throw new ArgumentException($"The sticky session cookie name '{name}' is invalid.", parameterName);
+            }
+
+            if (sticky.MaxAgeSeconds <= 0)
+            {
+                throw new ArgumentException("The sticky session cookie max age must be positive.", parameterName);
+            }
+        }
+    }
+
+    private static void ValidateRule(Func<ReferenceExpression> build, string parameterName)
+    {
+        try
+        {
+            // Build the rule once now so invalid values fail where the route is declared, not at startup.
+            build();
+        }
+        catch (ArgumentException ex)
+        {
+            // The matchers name their own arguments, which the caller didn't pass; the options came from the callback.
+            // ArgumentException.Message ends with " (Parameter '<name>')" when ParamName is set, so that is cut off
+            // before the callback's parameter is added.
+            var message = ex.ParamName is null ? ex.Message : ex.Message.Replace($" (Parameter '{ex.ParamName}')", "", StringComparison.Ordinal);
+            throw new ArgumentException(message, parameterName, ex);
+        }
     }
 }

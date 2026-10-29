@@ -14,6 +14,8 @@ internal static class TraefikRouteRule
     /// Builds a rule such as <c>Host(`api.example.com`) &amp;&amp; PathPrefix(`/v1`)</c>, with every matcher option combined
     /// with <c>&amp;&amp;</c>.
     /// </summary>
+    /// <param name="options">The route options.</param>
+    /// <returns>The rule.</returns>
     /// <remarks>
     /// The rule is an expression, so parameters in it resolve in run mode and become <c>${VAR}</c> placeholders at
     /// publish time. See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/"/>.
@@ -74,6 +76,8 @@ internal static class TraefikRouteRule
     /// <summary>
     /// Builds the rule of a TCP route: <c>HostSNI(`amqp.example.com`)</c>, or <c>HostSNI(`*`)</c> for every connection.
     /// </summary>
+    /// <param name="options">The TCP route options.</param>
+    /// <returns>The rule.</returns>
     /// <remarks>See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/"/>.</remarks>
     public static ReferenceExpression Build(TraefikTcpRouteOptions options)
     {

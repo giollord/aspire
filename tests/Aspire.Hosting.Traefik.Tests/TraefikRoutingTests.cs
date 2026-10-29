@@ -322,10 +322,10 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
     }
 
     [Theory]
-    [InlineData(null, null)]
-    [InlineData(null, "api")]
-    [InlineData("api.dev.localhost", "/a`b")]
-    public void InvalidRouteOptionsThrow(string? host, string? pathPrefix)
+    [InlineData(null, null, "A Traefik route needs a matcher, for example a host or a path prefix. (Parameter 'configure')")]
+    [InlineData(null, "api", "The path 'api' must start with '/'. (Parameter 'configure')")]
+    [InlineData("api.dev.localhost", "/a`b", "The value '/a`b' of the PathPrefix matcher can't contain '`'. (Parameter 'configure')")]
+    public void InvalidRouteOptionsThrow(string? host, string? pathPrefix, string message)
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
 
@@ -337,6 +337,6 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
             route.Host = host is null ? null : ReferenceExpression.Create($"{host}");
             route.PathPrefix = pathPrefix;
         }));
-        Assert.Equal("configure", exception.ParamName);
+        Assert.Equal(message, exception.Message);
     }
 }
