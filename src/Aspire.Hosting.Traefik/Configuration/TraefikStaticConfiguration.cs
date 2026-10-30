@@ -138,6 +138,15 @@ internal static class TraefikStaticConfiguration
 
     private static void AddEntryPoints(TraefikResource traefik, IList<object> args, bool isPublishMode)
     {
+        // TLS for every HTTP router on the entry point, including routers that don't come from Aspire routes: run mode
+        // with the default certificate (the Aspire developer certificate, see TraefikDynamicConfiguration.TlsFileContent),
+        // publish time with the default resolver, or Traefik's self-signed certificate without one. `websecure` only
+        // exists with a resolver (see TraefikResource.HasWebSecureEntryPoint).
+        // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
+        string GetTlsArgument(string entryPoint) => isPublishMode && traefik.DefaultAcmeResolver is { } resolver
+            ? $"--entrypoints.{entryPoint}.http.tls.certresolver={resolver.Name}"
+            : $"--entrypoints.{entryPoint}.http.tls=true";
+
         args.Add(FormattableString.Invariant($"--entrypoints.{TraefikResource.WebEntryPointName}.address=:{TraefikResource.WebTargetPort}"));
 
         if (traefik.HasWebSecureEntryPoint)
@@ -153,28 +162,15 @@ internal static class TraefikStaticConfiguration
             // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#address
             args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}{(entryPoint.IsUdp ? "/udp" : "")}"));
 
-            // An `https` entry point terminates TLS for every HTTP router on it, like `websecure`: run mode with the
-            // default certificate (the Aspire developer certificate), publish time with the default resolver when there
-            // is one, and Traefik's self-signed default certificate otherwise.
-            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
             if (entryPoint.IsTls)
             {
-                args.Add(isPublishMode && traefik.DefaultAcmeResolver is { } resolver
-                    ? $"--entrypoints.{entryPoint.Name}.http.tls.certresolver={resolver.Name}"
-                    : $"--entrypoints.{entryPoint.Name}.http.tls=true");
+                args.Add(GetTlsArgument(entryPoint.Name));
             }
         }
 
-        // The `websecure` entry point exists exactly when a resolver does (see TraefikResource.HasWebSecureEntryPoint).
-        if (traefik.DefaultAcmeResolver is { } defaultResolver)
+        if (traefik.HasWebSecureEntryPoint)
         {
-            // TLS by default for every router on `websecure`, including routers that don't come from Aspire routes,
-            // such as one added by hand to a provider. Aspire's own routes still set TLS on the router as well. As for
-            // the routes, run mode uses the default certificate and publish time the ACME resolver.
-            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
-            args.Add(isPublishMode
-                ? $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls.certresolver={defaultResolver.Name}"
-                : $"--entrypoints.{TraefikResource.WebSecureEntryPointName}.http.tls=true");
+            args.Add(GetTlsArgument(TraefikResource.WebSecureEntryPointName));
 
             if (isPublishMode)
             {
@@ -364,9 +360,14 @@ internal static class TraefikStaticConfiguration
                 args.Add($"{prefix}.dnschallenge.propagation.delaybeforechecks={delay}");
             }
         }
+        else if (acme.Challenge is TraefikAcmeChallenge.Http)
+        {
+            args.Add($"{prefix}.httpchallenge=true");
+            args.Add($"{prefix}.httpchallenge.entrypoint={TraefikResource.WebEntryPointName}");
+        }
         else
         {
-            AddChallenge(acme, prefix, args);
+            args.Add($"{prefix}.tlschallenge=true");
         }
 
         if (caServer is not null)
@@ -376,20 +377,6 @@ internal static class TraefikStaticConfiguration
         else if (acme.Staging)
         {
             args.Add($"{prefix}.caserver={LetsEncryptStagingDirectory}");
-        }
-    }
-
-    private static void AddChallenge(TraefikAcmeResolver acme, string prefix, IList<object> args)
-    {
-        switch (acme.Challenge)
-        {
-            case TraefikAcmeChallenge.TlsAlpn:
-                args.Add($"{prefix}.tlschallenge=true");
-                break;
-            case TraefikAcmeChallenge.Http:
-                args.Add($"{prefix}.httpchallenge=true");
-                args.Add($"{prefix}.httpchallenge.entrypoint={TraefikResource.WebEntryPointName}");
-                break;
         }
     }
 

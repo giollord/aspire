@@ -111,11 +111,10 @@ public static partial class TraefikBuilderExtensions
 
             builder.Eventing.Subscribe<BeforeStartEvent>((@event, _) =>
             {
-                // Send telemetry to the dashboard the Docker Compose environment deploys (on by default). The
-                // environment only sets OTEL_* variables, which Traefik ignores, so the endpoint becomes Traefik's
-                // own flags (see TraefikStaticConfiguration). Environments are usually added after Traefik, so they
-                // are looked up once the model is complete. Without an explicit compute environment, only a single
-                // environment is unambiguous.
+                // Send telemetry to the dashboard the Docker Compose environment deploys (on by default). Traefik
+                // ignores the OTEL_* variables the environment sets, so the endpoint becomes Traefik's own flags (see
+                // TraefikStaticConfiguration). Environments are usually added after Traefik, so they are looked up
+                // here, and without an explicit compute environment only a single one is unambiguous.
                 var environment = resource.GetComputeEnvironment() as DockerComposeEnvironmentResource
                     ?? (@event.Model.Resources.OfType<DockerComposeEnvironmentResource>().ToArray() is [var single] ? single : null);
 
@@ -312,8 +311,8 @@ public static partial class TraefikBuilderExtensions
         TraefikNames.ThrowIfInvalidName(name, "entry point name", nameof(name));
 
         // WithEndpoint would silently update an existing endpoint of that name, while Traefik would get a second
-        // address flag for the entry point, so the two could disagree. Endpoint names are case-insensitive.
-        if (builder.Resource.Annotations.OfType<EndpointAnnotation>().Any(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)))
+        // address flag for the entry point, so the two could disagree.
+        if (builder.Resource.Annotations.OfType<EndpointAnnotation>().Any(e => StringComparers.EndpointAnnotationName.Equals(e.Name, name)))
         {
             throw new ArgumentException($"Traefik resource '{builder.Resource.Name}' already has an entry point or endpoint named '{name}'.", nameof(name));
         }
@@ -567,6 +566,46 @@ public static partial class TraefikBuilderExtensions
     }
 
     /// <summary>
+    /// Sets the path of the Docker socket on the deployment host, which Traefik's Docker provider (or the Docker socket
+    /// proxy) mounts at publish time.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="hostPath">The path of the socket on the host, for example <c>/run/user/1000/docker.sock</c>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The default, <c>/var/run/docker.sock</c>, is the socket of a rootful Docker Engine. Rootless Docker listens on
+    /// <c>$XDG_RUNTIME_DIR/docker.sock</c>, and Podman on <c>/run/podman/podman.sock</c> (rootful) or
+    /// <c>/run/user/&lt;uid&gt;/podman/podman.sock</c> (rootless). The socket is always mounted at
+    /// <c>/var/run/docker.sock</c> inside the container, where Traefik and the socket proxy expect it.
+    /// </para>
+    /// <para>
+    /// It has no effect in run mode, where Traefik reads a file instead, or with <c>PublishAsExternal</c>, where Traefik
+    /// isn't deployed.
+    /// </para>
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithDockerSocketPath(this IResourceBuilder<TraefikResource> builder, string hostPath)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostPath);
+
+        var resource = builder.Resource;
+        resource.DockerSocketHostPath = hostPath;
+
+        // AddTraefik mounts the socket into Traefik, and WithDockerSocketProxy moves it to the proxy. Both may run
+        // before this method, so the existing mount is replaced.
+        IResource container = (IResource?)resource.DockerSocketProxy ?? resource;
+        foreach (var mount in container.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == TraefikResource.DockerSocketPath).ToList())
+        {
+            container.Annotations.Remove(mount);
+            container.Annotations.Add(new ContainerMountAnnotation(hostPath, TraefikResource.DockerSocketPath, ContainerMountType.BindMount, isReadOnly: true));
+        }
+
+        return builder;
+    }
+
+    /// <summary>
     /// Uses a Traefik that already runs on the deployment target instead of deploying this container at publish time.
     /// </summary>
     /// <param name="builder">The Traefik resource builder.</param>
@@ -604,15 +643,12 @@ public static partial class TraefikBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(network);
-        ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
+        TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", nameof(entryPoint));
 
         if (certResolver is not null)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(certResolver);
             TraefikNames.ThrowIfInvalidName(certResolver, "certificate resolver name", nameof(certResolver));
         }
-
-        TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", nameof(entryPoint));
 
         return builder.PublishAsExternal(
             network,
@@ -712,7 +748,6 @@ public static partial class TraefikBuilderExtensions
     public static IResourceBuilder<TraefikResource> WithExternalEntryPoint(this IResourceBuilder<TraefikResource> builder, string name, bool isTls, int? port = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         TraefikNames.ThrowIfInvalidName(name, "entry point name", nameof(name));
 
         if (port is { } publicPort)
@@ -724,53 +759,6 @@ public static partial class TraefikBuilderExtensions
         var entryPoints = builder.Resource.ExternalEntryPoints;
         entryPoints.RemoveAll(e => e.Name == name);
         entryPoints.Add(new TraefikExternalEntryPoint(name, isTls, port));
-
-        return builder;
-    }
-
-    /// <summary>
-    /// Sets the path of the Docker socket on the deployment host, which Traefik's Docker provider (or the Docker socket
-    /// proxy) mounts at publish time.
-    /// </summary>
-    /// <param name="builder">The Traefik resource builder.</param>
-    /// <param name="hostPath">The path of the socket on the host, for example <c>/run/user/1000/docker.sock</c>.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    /// <remarks>
-    /// <para>
-    /// The default, <c>/var/run/docker.sock</c>, is the socket of a rootful Docker Engine. Rootless Docker listens on
-    /// <c>$XDG_RUNTIME_DIR/docker.sock</c>, and Podman on <c>/run/podman/podman.sock</c> (rootful) or
-    /// <c>/run/user/&lt;uid&gt;/podman/podman.sock</c> (rootless). The socket is always mounted at
-    /// <c>/var/run/docker.sock</c> inside the container, where Traefik and the socket proxy expect it.
-    /// </para>
-    /// <para>
-    /// It has no effect in run mode, where Traefik reads a file instead, or with <c>PublishAsExternal</c>, where Traefik
-    /// isn't deployed.
-    /// </para>
-    /// </remarks>
-    [AspireExport]
-    public static IResourceBuilder<TraefikResource> WithDockerSocketPath(this IResourceBuilder<TraefikResource> builder, string hostPath)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(hostPath);
-
-        var resource = builder.Resource;
-        resource.DockerSocketHostPath = hostPath;
-
-        // AddTraefik mounts the socket into Traefik, and WithDockerSocketProxy moves it to the proxy. Both may run
-        // before this method, so the existing mount is replaced wherever it is.
-        foreach (var container in (IResource?[])[resource, resource.DockerSocketProxy])
-        {
-            if (container is null)
-            {
-                continue;
-            }
-
-            foreach (var mount in container.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == TraefikResource.DockerSocketPath).ToList())
-            {
-                container.Annotations.Remove(mount);
-                container.Annotations.Add(new ContainerMountAnnotation(hostPath, TraefikResource.DockerSocketPath, ContainerMountType.BindMount, isReadOnly: true));
-            }
-        }
 
         return builder;
     }

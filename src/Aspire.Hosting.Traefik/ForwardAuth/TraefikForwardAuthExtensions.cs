@@ -154,7 +154,6 @@ public static class TraefikForwardAuthExtensions
         Action<TraefikOAuth2ProxyOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         TraefikNames.ThrowIfInvalidName(name, "middleware name", nameof(name));
         ArgumentNullException.ThrowIfNull(issuerUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
@@ -184,10 +183,9 @@ public static class TraefikForwardAuthExtensions
 
         // The container is added before the middleware, which needs its endpoint, so both names are checked first: a
         // clash found by AddResource would otherwise leave the container in the model without its middleware.
-        // Resource names are case-insensitive.
         foreach (var resourceName in (string[])[name, proxyName])
         {
-            if (applicationBuilder.Resources.FirstOrDefault(r => string.Equals(r.Name, resourceName, StringComparison.OrdinalIgnoreCase)) is { } existing)
+            if (applicationBuilder.Resources.FirstOrDefault(r => StringComparers.ResourceName.Equals(r.Name, resourceName)) is { } existing)
             {
                 throw new ArgumentException($"The oauth2-proxy middleware '{name}' needs the resource name '{resourceName}', which resource '{existing.Name}' already has.", nameof(name));
             }
@@ -250,7 +248,7 @@ public static class TraefikForwardAuthExtensions
             // One cookie serves every protected host, so it is only Secure when none of them is plain HTTP, for example
             // when HTTPS is Traefik's default but a route sets EntryPoint to `web`.
             var isSecure = options.CookieSecure ?? (!middleware.Resource.ProtectsPlainHttp
-                && ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure);
+                && traefik.GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure);
             args.Add($"--cookie-secure={TraefikNames.ToLiteral(isSecure)}");
 
             if (options.CookieName is { } cookieName)

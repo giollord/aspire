@@ -264,8 +264,6 @@ public static class TraefikRoutingExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(traefik);
-        ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
-
         TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", nameof(entryPoint));
 
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
@@ -282,6 +280,7 @@ public static class TraefikRoutingExtensions
     /// An expression such as <c>http://api.dev.localhost:52314</c> in run mode, which includes the entry point's host
     /// port, or <c>https://api.example.com</c> at publish time.
     /// </returns>
+    /// <exception cref="InvalidOperationException">The resource has no Traefik route, or its first route has no host.</exception>
     /// <remarks>
     /// <para>
     /// Use the URL wherever the public address is needed, for example as an OAuth redirect URI or a public base URL
@@ -292,7 +291,6 @@ public static class TraefikRoutingExtensions
     /// <c>PublishAsExternal</c>, whether those are called before or after this method.
     /// </para>
     /// </remarks>
-    /// <exception cref="InvalidOperationException">The resource has no Traefik route, or its first route has no host.</exception>
     [AspireExport]
     public static ReferenceExpression GetTraefikUrl<T>(this IResourceBuilder<T> builder)
         where T : IResourceWithEndpoints
@@ -315,13 +313,13 @@ public static class TraefikRoutingExtensions
     /// An expression such as <c>https://secure.dev.localhost:8443</c> in run mode, or <c>https://secure.example.com</c>
     /// at publish time. The route's path, if any, is appended.
     /// </returns>
+    /// <exception cref="InvalidOperationException">The resource has no route with that router name, or the route has no host.</exception>
     /// <remarks>
     /// Use this overload when a resource has several routes, for example on different hosts or entry points, and each
     /// needs its own public address, such as one OAuth redirect URI per protected host. Only router names set with
     /// <see cref="TraefikRouteOptions.RouterName"/> are matched: default names are only assigned once the model is
     /// complete.
     /// </remarks>
-    /// <exception cref="InvalidOperationException">The resource has no route with that router name, or the route has no host.</exception>
     [AspireExport("getTraefikUrlForRouter")]
     public static ReferenceExpression GetTraefikUrl<T>(this IResourceBuilder<T> builder, string routerName)
         where T : IResourceWithEndpoints
@@ -387,10 +385,7 @@ public static class TraefikRoutingExtensions
     {
         if (options.HealthCheck is { } healthCheck)
         {
-            if (string.IsNullOrEmpty(healthCheck.Path) || !healthCheck.Path.StartsWith('/'))
-            {
-                throw new ArgumentException($"The health check path '{healthCheck.Path}' must start with '/'.", parameterName);
-            }
+            TraefikNames.ThrowIfInvalidPath(healthCheck.Path, "health check path", parameterName);
 
             if (healthCheck.IntervalSeconds <= 0 || healthCheck.TimeoutSeconds <= 0)
             {

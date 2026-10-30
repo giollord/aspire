@@ -151,13 +151,13 @@ internal sealed partial class TraefikOptionMap
     /// <summary>
     /// Renders the tree for the file provider.
     /// </summary>
+    /// <param name="renderExpression">Renders an expression: its resolved value in run mode, a Docker Compose placeholder at publish time.</param>
+    /// <param name="renderLiteral">Renders literal text, which Docker Compose needs escaped at publish time.</param>
     /// <returns>A tree of dictionaries and lists for the YAML serializer.</returns>
     /// <remarks>
     /// Synchronous so the same rendering serves run mode, where the expressions are resolved beforehand, and publish
     /// time, where the Docker Compose callbacks that render them are synchronous.
     /// </remarks>
-    /// <param name="renderExpression">Renders an expression: its resolved value in run mode, a Docker Compose placeholder at publish time.</param>
-    /// <param name="renderLiteral">Renders literal text, which Docker Compose needs escaped at publish time.</param>
     public Dictionary<string, object> ToFileConfiguration(Func<ReferenceExpression, string> renderExpression, Func<string, string> renderLiteral)
     {
         var result = new Dictionary<string, object>(_entries.Count);
@@ -180,6 +180,9 @@ internal sealed partial class TraefikOptionMap
     /// <summary>
     /// Renders the tree as Docker labels under <paramref name="prefix"/>.
     /// </summary>
+    /// <param name="labels">The labels to add to.</param>
+    /// <param name="prefix">The label key of the tree, for example <c>traefik.http.middlewares.strip.stripPrefix</c>.</param>
+    /// <param name="renderExpression">Renders an expression for Docker Compose.</param>
     /// <remarks>
     /// Nested keys are joined with dots and lists with commas, as the Docker provider reads them:
     /// <code>
@@ -188,9 +191,6 @@ internal sealed partial class TraefikOptionMap
     /// </code>
     /// See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/other-providers/docker/"/>.
     /// </remarks>
-    /// <param name="labels">The labels to add to.</param>
-    /// <param name="prefix">The label key of the tree, for example <c>traefik.http.middlewares.strip.stripPrefix</c>.</param>
-    /// <param name="renderExpression">Renders an expression for Docker Compose.</param>
     public void AddLabels(IDictionary<string, string> labels, string prefix, Func<ReferenceExpression, string> renderExpression)
     {
         foreach (var (key, value) in _entries)

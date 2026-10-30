@@ -16,6 +16,7 @@
   <ItemGroup>
     <Compile Include="$(SharedDir)KnownEndpointNames.cs" LinkBase="Shared" />
     <Compile Include="$(SharedDir)KnownResourceNames.cs" LinkBase="Shared" />
+    <Compile Include="$(SharedDir)StringComparers.cs" LinkBase="Shared" />
   </ItemGroup>
 
   <ItemGroup>

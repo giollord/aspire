@@ -22,13 +22,15 @@ internal static partial class TraefikNames
     public static bool IsValidName(string name) => ValidNameRegex().IsMatch(name);
 
     /// <summary>
-    /// Throws when a name passed to a public method isn't valid (see <see cref="IsValidName"/>).
+    /// Throws when a name passed to a public method is empty or isn't valid (see <see cref="IsValidName"/>).
     /// </summary>
     /// <param name="name">The name.</param>
     /// <param name="description">What the name is, for the message, for example <c>entry point name</c>.</param>
     /// <param name="parameterName">The parameter the name was passed in.</param>
-    public static void ThrowIfInvalidName(string name, string description, string parameterName)
+    public static void ThrowIfInvalidName([NotNull] string? name, string description, string parameterName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name, parameterName);
+
         if (!IsValidName(name))
         {
             throw new ArgumentException($"The {description} '{name}' is invalid. Use letters, digits, '-' and '_' only.", parameterName);

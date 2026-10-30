@@ -123,9 +123,7 @@ public static partial class TraefikBuilderExtensions
         configure?.Invoke(options);
 
         var resource = builder.Resource;
-        var resolver = options.ResolverName is null
-            ? resource.DefaultAcmeResolver
-            : resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, options.ResolverName, StringComparison.OrdinalIgnoreCase));
+        var resolver = options.ResolverName is null ? resource.DefaultAcmeResolver : resource.FindAcmeResolver(options.ResolverName);
 
         if (resolver is null)
         {
@@ -379,16 +377,13 @@ public static partial class TraefikBuilderExtensions
 
     private static IResourceBuilder<TraefikResource> ConfigureLetsEncrypt(IResourceBuilder<TraefikResource> builder, ReferenceExpression email, string resolverName, TraefikAcmeChallenge challenge, bool staging)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(resolverName);
-
-        TraefikNames.ThrowIfInvalidName(resolverName, "resolver name", nameof(resolverName));
+        TraefikNames.ThrowIfInvalidName(resolverName, "certificate resolver name", nameof(resolverName));
 
         var resource = builder.Resource;
         var isPublishMode = builder.ApplicationBuilder.ExecutionContext.IsPublishMode;
         var hadWebSecure = resource.HasWebSecureEntryPoint;
 
-        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
-        var resolver = resource.AcmeResolvers.FirstOrDefault(r => string.Equals(r.Name, resolverName, StringComparison.OrdinalIgnoreCase));
+        var resolver = resource.FindAcmeResolver(resolverName);
         if (resolver is null)
         {
             resolver = new TraefikAcmeResolver(resolverName, email);

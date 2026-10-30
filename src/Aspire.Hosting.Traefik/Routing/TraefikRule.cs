@@ -145,13 +145,13 @@ public sealed class TraefikRule
     /// <summary>
     /// Matches TLS connections by server name (SNI), for TCP routes.
     /// </summary>
+    /// <param name="host">The server name.</param>
+    /// <returns>The matcher.</returns>
     /// <remarks>
     /// TCP routers have their own matchers. Only HostSNI is needed, for <see cref="TraefikTcpRouteOptions"/>, so it isn't
     /// public: TCP and HTTP matchers can't be mixed in one rule. See
     /// <see href="https://doc.traefik.io/traefik/reference/routing-configuration/tcp/routing/rules-and-priority/"/>.
     /// </remarks>
-    /// <param name="host">The server name.</param>
-    /// <returns>The matcher.</returns>
     internal static TraefikRule HostSni(ReferenceExpression host) => Matcher("HostSNI", host);
 
     /// <summary>

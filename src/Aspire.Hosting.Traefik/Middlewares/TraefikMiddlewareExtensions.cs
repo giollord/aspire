@@ -48,10 +48,8 @@ public static partial class TraefikMiddlewareExtensions
     public static IResourceBuilder<TraefikMiddlewareResource> AddMiddleware(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string type)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentException.ThrowIfNullOrWhiteSpace(type);
-
         TraefikNames.ThrowIfInvalidName(name, "middleware name", nameof(name));
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
 
         if (!MiddlewareTypeRegex().IsMatch(type))
         {

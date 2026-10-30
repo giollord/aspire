@@ -16,11 +16,11 @@ internal static class TraefikRouteRule
     /// </summary>
     /// <param name="options">The route options.</param>
     /// <returns>The rule.</returns>
+    /// <exception cref="ArgumentException">The options contain no matcher, or an invalid value.</exception>
     /// <remarks>
     /// The rule is an expression, so parameters in it resolve in run mode and become <c>${VAR}</c> placeholders at
     /// publish time. See <see href="https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/"/>.
     /// </remarks>
-    /// <exception cref="ArgumentException">The options contain no matcher, or an invalid value.</exception>
     public static ReferenceExpression Build(TraefikRouteOptions options)
     {
         var builder = new ReferenceExpressionBuilder();

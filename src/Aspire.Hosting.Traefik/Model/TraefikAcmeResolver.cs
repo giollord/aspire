@@ -35,7 +35,7 @@ internal sealed class TraefikAcmeResolver(string name, ReferenceExpression email
     public bool Staging { get; set; }
 
     /// <summary>
-    /// Gets the DNS-01 challenge, which replaces <see cref="Challenge"/> when set.
+    /// Gets or sets the DNS-01 challenge, which replaces <see cref="Challenge"/> when set.
     /// </summary>
     public TraefikDnsChallenge? DnsChallenge { get; set; }
 }

@@ -105,7 +105,7 @@ internal static class TraefikDynamicConfiguration
             Network = KnownNetworkIdentifiers.DefaultAspireContainerNetwork,
         };
 
-        var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: false);
+        var defaults = traefik.GetRouteDefaults(isPublishMode: false);
         var http = new HttpConfiguration();
 
         foreach (var route in traefik.Routes)
@@ -210,6 +210,9 @@ internal static class TraefikDynamicConfiguration
     /// Generates the dynamic configuration of a managed Traefik at publish time: its entry-point middlewares, the
     /// dashboard router, and the middlewares they use.
     /// </summary>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <param name="composeService">The Docker Compose service resource of Traefik, which owns the placeholders.</param>
+    /// <param name="service">The Docker Compose service of Traefik, whose environment holds the resolved endpoint values.</param>
     /// <returns>The YAML content of the Docker Compose config.</returns>
     /// <remarks>
     /// The file becomes a Docker Compose config, whose content Docker Compose interpolates like the rest of the file:
@@ -234,12 +237,9 @@ internal static class TraefikDynamicConfiguration
     /// So parameters become <c>${VAR}</c> placeholders and a literal <c>$</c> is written as <c>$$</c>, as in labels.
     /// See <see href="https://docs.docker.com/reference/compose-file/configs/"/>.
     /// </remarks>
-    /// <param name="traefik">The managed Traefik.</param>
-    /// <param name="composeService">The Docker Compose service resource of Traefik, which owns the placeholders.</param>
-    /// <param name="service">The Docker Compose service of Traefik, whose environment holds the resolved endpoint values.</param>
     public static string GeneratePublish(TraefikResource traefik, DockerComposeServiceResource composeService, Service service)
     {
-        var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
+        var defaults = traefik.GetRouteDefaults(isPublishMode: true);
         var http = new HttpConfiguration();
 
         if (traefik.DashboardHost is { } dashboardHost)

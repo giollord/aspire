@@ -143,7 +143,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                         TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), route.Endpoint);
                     }
 
-                    var defaults = ((ITraefikRouteTarget)annotation.Traefik).GetRouteDefaults(isPublishMode: true);
+                    var defaults = annotation.Traefik.GetRouteDefaults(isPublishMode: true);
                     resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation(
                         (composeService, service) => TraefikDockerLabels.Apply(composeService, service, route, defaults)));
                 }
@@ -267,10 +267,10 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
             // The callback comes back on the entry point the user signed in from, so a host routed over both HTTP and
             // HTTPS needs a sign-in route on each. A route without an entry point uses Traefik's default one, so it
-            // counts as that entry point and doesn't add a second router with the same rule.
+            // counts as that entry point and doesn't add a second router with the same rule. The proxy belongs to one
+            // middleware, so all its sign-in routes go through the same Traefik.
             // https://oauth2-proxy.github.io/oauth2-proxy/configuration/integrations/traefik
-            // The proxy belongs to one middleware, so all its sign-in routes go through the same Traefik.
-            var defaultEntryPoint = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).EntryPoint.ValueExpression;
+            var defaultEntryPoint = traefik.GetRouteDefaults(isPublishMode).EntryPoint.ValueExpression;
             var signInRoutes = proxy.Annotations.OfType<TraefikRouteAnnotation>().Where(a => a.IsSignInRoute).ToList();
 
             // Sign-in routes always have a host: AddSignInRoutes checks it before calling this method.
@@ -359,8 +359,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
     private static void ValidateCertResolver(TraefikResource traefik, IResource resource, string routerName, string certResolver, string kind)
     {
-        // Resolver names are keys of Traefik's static configuration, which it matches case-insensitively.
-        if (!traefik.AcmeResolvers.Any(r => string.Equals(r.Name, certResolver, StringComparison.OrdinalIgnoreCase)))
+        if (traefik.FindAcmeResolver(certResolver) is null)
         {
             throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the certificate resolver '{certResolver}', which '{traefik.Name}' doesn't have. Add it with WithLetsEncrypt.");
         }
@@ -456,7 +455,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
         // its shared network, so those services join it too. Routed services join it in TraefikDockerLabels.
         foreach (var middleware in middlewares)
         {
-            if (((ITraefikRouteTarget)middleware.Parent).GetRouteDefaults(isPublishMode: true).Network is not { } network)
+            if (middleware.Parent.GetRouteDefaults(isPublishMode: true).Network is not { } network)
             {
                 continue;
             }
@@ -530,8 +529,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
     private static void ApplyTransportRoutes(DistributedApplicationModel model, bool isPublishMode, bool publishesToDockerCompose)
     {
         // TCP and UDP routers live in their own namespaces in Traefik (`tcp.routers`, `udp.routers`), so a name only has
-        // to be unique within its protocol.
-        var routerNames = new Dictionary<(string Protocol, string Name), (IResource Owner, string Name)>(TransportRouterNameComparer.Instance);
+        // to be unique within its protocol. The key `tcp.api` maps to the environment name TCP_API, like the variables
+        // of TCP routes (see RouterNameComparer).
+        var routerNames = new Dictionary<string, (IResource Owner, string Name)>(RouterNameComparer.Instance);
 
         foreach (var resource in model.Resources)
         {
@@ -564,9 +564,9 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
                 ThrowIfInvalidRouterName(resource, routerName);
 
-                if (!routerNames.TryAdd((protocol, routerName), (resource, routerName)))
+                if (!routerNames.TryAdd($"{protocol}.{routerName}", (resource, routerName)))
                 {
-                    var existing = routerNames[(protocol, routerName)];
+                    var existing = routerNames[$"{protocol}.{routerName}"];
                     throw new InvalidOperationException($"The Traefik {protocol.ToUpperInvariant()} router name '{routerName}' of resource '{resource.Name}' clashes with '{existing.Name}' of '{existing.Owner.Name}'. Set {nameof(TraefikTcpRouteOptions)}.{nameof(TraefikTcpRouteOptions.RouterName)} to make it unique.");
                 }
 
@@ -594,7 +594,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                         TraefikDockerLabels.AddTargetPortProbe(resourceWithEnvironment, TraefikDockerLabels.GetTargetPortVariableName(route), endpoint);
                     }
 
-                    var defaults = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: true);
+                    var defaults = traefik.GetRouteDefaults(isPublishMode: true);
                     resource.Annotations.Add(new DockerComposeServiceCustomizationAnnotation(
                         (composeService, service) => TraefikDockerLabels.Apply(composeService, service, route, defaults)));
                 }
@@ -620,10 +620,10 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
         if (endpointName is not null)
         {
-            annotation = endpoints.FirstOrDefault(e => string.Equals(e.Name, endpointName, StringComparison.OrdinalIgnoreCase))
+            annotation = endpoints.FirstOrDefault(e => StringComparers.EndpointAnnotationName.Equals(e.Name, endpointName))
                 ?? throw new InvalidOperationException($"Resource '{resource.Name}' has no endpoint named '{endpointName}' to route Traefik traffic to.");
         }
-        else if (endpoints.FirstOrDefault(e => string.Equals(e.Name, protocol, StringComparison.OrdinalIgnoreCase)) is { } named)
+        else if (endpoints.FirstOrDefault(e => StringComparers.EndpointAnnotationName.Equals(e.Name, protocol)) is { } named)
         {
             annotation = named;
         }
@@ -682,19 +682,5 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             ReferenceEquals(x, y) || (x is not null && y is not null && TraefikNames.ToEnvironmentName(x) == TraefikNames.ToEnvironmentName(y));
 
         public int GetHashCode(string obj) => TraefikNames.ToEnvironmentName(obj).GetHashCode(StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Compares TCP and UDP router names within their protocol, like <see cref="RouterNameComparer"/>.
-    /// </summary>
-    private sealed class TransportRouterNameComparer : IEqualityComparer<(string Protocol, string Name)>
-    {
-        public static TransportRouterNameComparer Instance { get; } = new();
-
-        public bool Equals((string Protocol, string Name) x, (string Protocol, string Name) y) =>
-            x.Protocol == y.Protocol && RouterNameComparer.Instance.Equals(x.Name, y.Name);
-
-        public int GetHashCode((string Protocol, string Name) obj) =>
-            HashCode.Combine(obj.Protocol, RouterNameComparer.Instance.GetHashCode(obj.Name));
     }
 }

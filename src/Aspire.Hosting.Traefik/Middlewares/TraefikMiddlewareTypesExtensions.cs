@@ -549,6 +549,7 @@ public static class TraefikMiddlewareTypesExtensions
     /// <param name="user">The user name.</param>
     /// <param name="password">The password.</param>
     /// <returns>A reference to the middleware's <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="InvalidOperationException">The application is being published.</exception>
     /// <remarks>
     /// <para>
     /// The password is hashed with SHA1 (the <c>{SHA}</c> <c>htpasswd</c> format) when Traefik's configuration is written.
@@ -559,7 +560,6 @@ public static class TraefikMiddlewareTypesExtensions
     /// overload that takes <c>htpasswd</c> entries for published applications.
     /// </para>
     /// </remarks>
-    /// <exception cref="InvalidOperationException">The application is being published.</exception>
     [AspireExport("addBasicAuthWithPassword")]
     public static IResourceBuilder<TraefikMiddlewareResource> AddBasicAuth(this IResourceBuilder<TraefikResource> builder, [ResourceName] string name, string user, IResourceBuilder<ParameterResource> password)
     {

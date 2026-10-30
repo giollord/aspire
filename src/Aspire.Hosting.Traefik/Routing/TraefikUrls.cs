@@ -20,20 +20,11 @@ internal static class TraefikUrls
     /// <param name="isPublishMode">Whether the URL is for the published application.</param>
     /// <returns>The URL.</returns>
     /// <remarks>
-    /// <para>
-    /// In run mode the entry point's host port is random unless pinned, so the URL includes it. At publish time the
-    /// URL includes the entry point's public port only when it isn't the standard port of the scheme (80 for HTTP, 443
-    /// for HTTPS), for example after <c>WithHostHttpsPort(8443)</c> or <c>WithExternalEntryPoint("https", true, 8443)</c>.
-    /// </para>
-    /// <para>
-    /// The scheme and the port depend on how Traefik is configured, which can still change after the URL is built:
-    /// <c>GetTraefikUrl</c> may be called before <c>WithLetsEncrypt</c> or <c>PublishAsExternal</c>. The scheme is
-    /// therefore a conditional expression decided when it is evaluated, which the Docker Compose publisher does while
-    /// writing the files. The publisher can't evaluate any other kind of value, so the publish-time port is read
-    /// when the URL is built, and checked again when it is evaluated (see <see cref="PublishPortCondition"/>).
-    /// </para>
+    /// In run mode the URL always has the entry point's host port, which is random unless pinned. At publish time it
+    /// only has a port that isn't the standard one of the scheme (80 or 443). <c>GetTraefikUrl</c> may be called before
+    /// <c>WithLetsEncrypt</c> or <c>PublishAsExternal</c>, so the scheme and port are decided when the URL is evaluated.
     /// </remarks>
-    public static ReferenceExpression Build(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
+    public static ReferenceExpression Build(TraefikResource traefik, TraefikRouteOptions options, bool isPublishMode)
     {
         if (options.Host is not { } host)
         {
@@ -48,12 +39,12 @@ internal static class TraefikUrls
             ReferenceExpression.Create($"http://")));
         builder.AppendValueProvider(host);
 
-        if (!isPublishMode && traefik is TraefikResource managed)
+        if (!isPublishMode)
         {
             builder.AppendLiteral(":");
-            builder.AppendValueProvider(new HostPort(managed, options));
+            builder.AppendValueProvider(new HostPort(traefik, options));
         }
-        else if (isPublishMode)
+        else
         {
             var port = GetNonStandardPublishPort(traefik, options);
             builder.AppendValueProvider(ReferenceExpression.CreateConditional(
@@ -78,7 +69,7 @@ internal static class TraefikUrls
     /// <param name="options">The route options.</param>
     /// <param name="isPublishMode">Whether the route is for the published application.</param>
     /// <returns><see langword="true"/> when the route uses TLS; otherwise, <see langword="false"/>.</returns>
-    public static bool IsSecure(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
+    public static bool IsSecure(TraefikResource traefik, TraefikRouteOptions options, bool isPublishMode)
     {
         // A route's own resolver turns on TLS when published (see TraefikDockerLabels), but not in run mode, where no
         // certificates are requested.
@@ -98,7 +89,7 @@ internal static class TraefikUrls
     /// <param name="traefik">The Traefik the route targets.</param>
     /// <param name="options">The route options.</param>
     /// <returns>The port, or <see langword="null"/> for the standard port or a parameterized entry point.</returns>
-    public static int? GetNonStandardPublishPort(ITraefikRouteTarget traefik, TraefikRouteOptions options)
+    public static int? GetNonStandardPublishPort(TraefikResource traefik, TraefikRouteOptions options)
     {
         if ((options.EntryPoint ?? TraefikNames.GetLiteral(traefik.GetRouteDefaults(isPublishMode: true).EntryPoint)) is not { } entryPoint
             || traefik.GetPublishPort(entryPoint) is not { } port)
@@ -119,7 +110,7 @@ internal static class TraefikUrls
     /// condition's value expression and its branches, and the manifest keeps one conditional per name, so without it
     /// every Traefik URL would share the name of the first one.
     /// </remarks>
-    private sealed class SecureCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode) : IValueProvider, IManifestExpressionProvider
+    private sealed class SecureCondition(TraefikResource traefik, TraefikRouteOptions options, bool isPublishMode) : IValueProvider, IManifestExpressionProvider
     {
         public string ValueExpression =>
             $"traefik-https.{traefik.Name}.{options.EntryPoint ?? "default"}.{(isPublishMode ? options.CertResolver ?? "none" : "none")}.{(isPublishMode ? "publish" : "run")}";
@@ -133,12 +124,12 @@ internal static class TraefikUrls
     /// port of the scheme.
     /// </summary>
     /// <remarks>
-    /// The port in the URL is the one known when the URL was built, because the Docker Compose publisher only
-    /// evaluates the condition of a conditional expression, not other values. Evaluating this condition checks that the
-    /// port is still the same once the model is complete, so a URL built before <c>WithHostHttpsPort</c> or
-    /// <c>WithExternalEntryPoint</c> fails instead of pointing at the wrong port.
+    /// The Docker Compose publisher evaluates the condition of a conditional expression but writes any other value
+    /// provider as a placeholder, so the port itself has to be a literal, taken when the URL is built. Evaluating the
+    /// condition checks that the port hasn't changed since, so a URL built before <c>WithHostHttpsPort</c> fails
+    /// instead of pointing at the wrong port.
     /// </remarks>
-    private sealed class PublishPortCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, int? port) : IValueProvider, IManifestExpressionProvider
+    private sealed class PublishPortCondition(TraefikResource traefik, TraefikRouteOptions options, int? port) : IValueProvider, IManifestExpressionProvider
     {
         public string ValueExpression =>
             $"traefik-port.{traefik.Name}.{options.EntryPoint ?? "default"}.{(port is { } value ? value.ToString(CultureInfo.InvariantCulture) : "standard")}";
@@ -180,7 +171,7 @@ internal static class TraefikUrls
 
         private EndpointReferenceExpression GetPort()
         {
-            var entryPoint = options.EntryPoint ?? ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode: false).EntryPointName;
+            var entryPoint = options.EntryPoint ?? traefik.GetRouteDefaults(isPublishMode: false).EntryPointName;
             return TraefikStaticConfiguration.GetHostEndpoint(traefik, entryPoint).Property(EndpointProperty.Port);
         }
     }

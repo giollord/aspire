@@ -6,43 +6,6 @@ using Aspire.Hosting.ApplicationModel;
 namespace Aspire.Hosting.Traefik;
 
 /// <summary>
-/// What route generation needs to know about the Traefik a route targets.
-/// </summary>
-/// <remarks>
-/// Routing code depends on this instead of <see cref="TraefikResource"/> so that a standalone external
-/// Traefik resource could be added later without changing the routing pipeline.
-/// </remarks>
-internal interface ITraefikRouteTarget
-{
-    /// <summary>
-    /// Gets the name of the Traefik resource.
-    /// </summary>
-    string Name { get; }
-
-    /// <summary>
-    /// Gets the entry point and TLS settings of the routes that don't set their own.
-    /// </summary>
-    /// <param name="isPublishMode">Whether the routes are for the published application.</param>
-    /// <returns>The defaults.</returns>
-    TraefikRouteDefaults GetRouteDefaults(bool isPublishMode);
-
-    /// <summary>
-    /// Determines whether clients reach an entry point over TLS.
-    /// </summary>
-    /// <param name="entryPoint">The entry point name.</param>
-    /// <param name="isPublishMode">Whether the entry point is for the published application.</param>
-    /// <returns><see langword="true"/> when the entry point terminates TLS; otherwise, <see langword="false"/>.</returns>
-    bool IsTlsEntryPoint(string entryPoint, bool isPublishMode);
-
-    /// <summary>
-    /// Gets the public port of an entry point at publish time, as clients connect to it.
-    /// </summary>
-    /// <param name="entryPoint">The entry point name.</param>
-    /// <returns>The port, or <see langword="null"/> when it isn't known, in which case the standard port is assumed.</returns>
-    int? GetPublishPort(string entryPoint);
-}
-
-/// <summary>
 /// The entry point and TLS settings applied to a route that doesn't override them.
 /// </summary>
 /// <param name="EntryPoint">
