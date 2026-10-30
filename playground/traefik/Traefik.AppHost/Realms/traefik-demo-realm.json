@@ -12,7 +12,7 @@
       "secret": "${TRAEFIK_DEMO_CLIENT_SECRET}",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": [ "${TRAEFIK_DEMO_REDIRECT_URI}" ],
+      "redirectUris": [ "${TRAEFIK_DEMO_HTTP_REDIRECT_URI}", "${TRAEFIK_DEMO_REDIRECT_URI}", "${TRAEFIK_DEMO_API_REDIRECT_URI}" ],
       "webOrigins": [ "+" ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
