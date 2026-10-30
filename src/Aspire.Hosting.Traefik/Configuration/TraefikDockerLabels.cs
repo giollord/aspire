@@ -29,6 +29,13 @@ namespace Aspire.Hosting.Traefik;
 /// </remarks>
 internal static class TraefikDockerLabels
 {
+    /// <summary>
+    /// The prefix of the label that marks a service as routed by one managed Traefik, for example
+    /// <c>aspire.traefik.traefik: "true"</c>. Each managed Traefik only reads services with its own label (see
+    /// <see cref="GetInstanceConstraint"/>), so two of them in one deployment don't serve each other's routes.
+    /// </summary>
+    public const string InstanceLabelPrefix = "aspire.traefik.";
+
     // Routed services opt in with this label, because Traefik's Docker provider is started with exposedByDefault=false.
     private const string EnableLabel = "traefik.enable";
 
@@ -50,6 +57,7 @@ internal static class TraefikDockerLabels
         var loadBalancer = $"traefik.http.services.{route.RouterName}.loadbalancer";
 
         labels[EnableLabel] = "true";
+        AddInstanceLabel(labels, route.Traefik);
         labels[$"{router}.rule"] = ToComposeExpression(composeService, TraefikRouteRule.Build(route.Options));
         labels[$"{router}.entrypoints"] = route.Options.EntryPoint ?? ToComposeExpression(composeService, defaults.EntryPoint);
         labels[$"{router}.service"] = route.RouterName;
@@ -144,6 +152,7 @@ internal static class TraefikDockerLabels
         var router = $"traefik.{route.Protocol}.routers.{route.RouterName}";
 
         labels[EnableLabel] = "true";
+        AddInstanceLabel(labels, route.Traefik);
 
         if (route.Tcp is { } tcp)
         {
@@ -181,6 +190,16 @@ internal static class TraefikDockerLabels
 
         JoinNetwork(service, defaults);
     }
+
+    /// <summary>
+    /// Gets the Docker provider constraint that limits a managed Traefik to the services routed through it, for example
+    /// <c>Label(`aspire.traefik.traefik`, `true`)</c>.
+    /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/providers/docker/#constraints"/>.
+    /// </summary>
+    /// <param name="traefik">The managed Traefik.</param>
+    /// <returns>The constraint expression.</returns>
+    public static string GetInstanceConstraint(TraefikResource traefik) =>
+        $"Label(`{InstanceLabelPrefix}{traefik.Name}`, `true`)";
 
     /// <summary>
     /// The name of the temporary environment variable that carries a route's backend port from the Docker Compose
@@ -316,6 +335,15 @@ internal static class TraefikDockerLabels
     /// <param name="value">Literal text.</param>
     /// <returns>The text with every <c>$</c> doubled.</returns>
     public static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
+
+    private static void AddInstanceLabel(IDictionary<string, string> labels, TraefikResource traefik)
+    {
+        // An external Traefik isn't started by Aspire, so it has no constraint that reads the label.
+        if (traefik.PublishExternal is null)
+        {
+            labels[$"{InstanceLabelPrefix}{traefik.Name}"] = "true";
+        }
+    }
 
     private static string GetTargetPort(Service service, string variableName, EndpointReference endpoint, string routerName)
     {

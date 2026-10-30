@@ -61,7 +61,7 @@ api.WithTraefikRoute(traefik, route =>
 
 ### Rules
 
-The matcher options of a route are combined with `&&`: `Host`, `PathPrefix`, `Path`, `Methods` and `ClientIps` (any of them), `Headers`, and `Query`. For alternatives, negations, or regular expressions, set `Rule` to a `TraefikRule`, built with `&`, `|`, and `!`:
+The matcher options of a route are combined with `&&`: `Host`, `PathPrefix`, `Path`, `Methods` and `ClientIps` (any of them), `Headers`, and `Query`. For alternatives, negations, or regular expressions, set `Rule` to a `TraefikRule` (in the `Aspire.Hosting.Traefik` namespace), built with `&`, `|`, and `!`:
 
 ```csharp
 api.WithTraefikRoute(traefik, route =>
@@ -73,7 +73,7 @@ api.WithTraefikRoute(traefik, route =>
 // Host(`api.${DOMAIN}`) && (PathPrefix(`/admin`) || PathRegexp(`^/ops/[0-9]+`)) && !ClientIP(`203.0.113.0/24`)
 ```
 
-Values are quoted and nested combinations get parentheses. `RawRule` takes a whole rule in Traefik's syntax instead, and can't be combined with the other options. See [rules and priority](https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/).
+Values are quoted and nested combinations get parentheses. `RawRule` takes a whole rule in Traefik's syntax instead, and can't be combined with the other options except `Host`, which then only sets the route's public URL and isn't added to the rule. See [rules and priority](https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/).
 
 ### Load balancing and health checks
 

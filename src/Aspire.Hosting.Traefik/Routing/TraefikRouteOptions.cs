@@ -84,12 +84,13 @@ public sealed class TraefikRouteOptions
 
     /// <summary>
     /// Gets or sets the whole router rule in Traefik's syntax, for example <c>Host(`a.example.com`) || Host(`b.example.com`)</c>.
-    /// It can't be combined with the other matcher options.
+    /// It can't be combined with the other matcher options, except <see cref="Host"/>.
     /// </summary>
     /// <remarks>
-    /// Prefer the other options: they quote values and keep parameters as placeholders at publish time. Set
-    /// <see cref="Host"/> too only when it is the same host as in the rule, because a rule without it has no single
-    /// public URL; see <c>GetTraefikUrl</c>.
+    /// Prefer the other options: they quote values and keep parameters as placeholders at publish time. With a raw
+    /// rule, <see cref="Host"/> isn't added to the rule; it only gives the route its public URL (see
+    /// <c>GetTraefikUrl</c>) and, with oauth2-proxy, its sign-in route. Set it to a host the rule matches, because a
+    /// rule alone has no single public URL.
     /// </remarks>
     public string? RawRule { get; set; }
 

@@ -121,6 +121,8 @@ public static class TraefikRoutingExtensions
             throw new ArgumentException("StripPathPrefix needs a path prefix to strip.", nameof(configure));
         }
 
+        ValidateNames(options.EntryPoint, options.CertResolver, nameof(configure));
+
         ValidateServiceOptions(options, nameof(configure));
         ValidateRule(() => TraefikRouteRule.Build(options), nameof(configure));
 
@@ -207,6 +209,8 @@ public static class TraefikRoutingExtensions
             throw new ArgumentException("A Traefik TCP route needs an entry point.", nameof(configure));
         }
 
+        ValidateNames(options.EntryPoint, options.CertResolver, nameof(configure));
+
         if (options.Tls && options.TlsPassthrough)
         {
             throw new ArgumentException($"A Traefik TCP route either terminates TLS ({nameof(TraefikTcpRouteOptions.Tls)}) or passes it through ({nameof(TraefikTcpRouteOptions.TlsPassthrough)}), not both.", nameof(configure));
@@ -261,6 +265,8 @@ public static class TraefikRoutingExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(traefik);
         ArgumentException.ThrowIfNullOrWhiteSpace(entryPoint);
+
+        TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", nameof(entryPoint));
 
         builder.ApplicationBuilder.Services.TryAddEventingSubscriber<TraefikRoutingSubscriber>();
 
@@ -359,6 +365,22 @@ public static class TraefikRoutingExtensions
             ReferenceExpression expression => builder.WithTraefikRoute(traefik, expression, middlewares),
             _ => throw new ArgumentException($"Unsupported type '{host?.GetType().Name}'. Expected a string or a reference expression.", nameof(host)),
         };
+    }
+
+    private static void ValidateNames(string? entryPoint, string? certResolver, string parameterName)
+    {
+        // Both are written into labels and configuration files as they are, so they must be plain names: a `$` would
+        // be interpolated by Docker Compose, and Traefik's own names are letters, digits, '-' and '_'. Checking here also
+        // covers an external Traefik, whose entry points and resolvers are otherwise never checked.
+        if (entryPoint is not null)
+        {
+            TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", parameterName);
+        }
+
+        if (certResolver is not null)
+        {
+            TraefikNames.ThrowIfInvalidName(certResolver, "certificate resolver name", parameterName);
+        }
     }
 
     private static void ValidateServiceOptions(TraefikRouteOptions options, string parameterName)

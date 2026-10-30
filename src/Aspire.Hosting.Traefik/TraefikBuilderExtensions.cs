@@ -32,6 +32,8 @@ public static partial class TraefikBuilderExtensions
     // The port docker-socket-proxy serves the filtered Docker API on.
     private const int SocketProxyPort = 2375;
 
+    private const int MaxPort = 65535;
+
     /// <summary>
     /// Adds a Traefik Proxy container to the application model.
     /// </summary>
@@ -269,6 +271,8 @@ public static partial class TraefikBuilderExtensions
     /// <param name="port">The host port. When <see langword="null"/>, a random port is used in run mode and <paramref name="targetPort"/> at publish time.</param>
     /// <param name="scheme">The scheme of the endpoint: <c>tcp</c>, <c>http</c>, <c>https</c>, or <c>udp</c> for an entry point that receives UDP datagrams.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetPort"/> or <paramref name="port"/> isn't between 1 and 65535.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is reserved, invalid, or already used by an endpoint of the resource.</exception>
     /// <remarks>
     /// <para>
     /// A <c>udp</c> entry point only takes UDP routes (<c>WithTraefikUdpRoute</c>). In run mode its endpoint isn't
@@ -283,6 +287,15 @@ public static partial class TraefikBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentOutOfRangeException.ThrowIfLessThan(targetPort, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(targetPort, MaxPort);
+
+        if (port is { } hostPort)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(hostPort, 1, nameof(port));
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(hostPort, MaxPort, nameof(port));
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(scheme);
 
         if (name is TraefikResource.WebEntryPointName or TraefikResource.WebSecureEntryPointName or TraefikResource.TraefikEntryPointName)
@@ -291,6 +304,13 @@ public static partial class TraefikBuilderExtensions
         }
 
         TraefikNames.ThrowIfInvalidName(name, "entry point name", nameof(name));
+
+        // WithEndpoint would silently update an existing endpoint of that name, while Traefik would get a second
+        // address flag for the entry point, so the two could disagree. Endpoint names are case-insensitive.
+        if (builder.Resource.Annotations.OfType<EndpointAnnotation>().Any(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException($"Traefik resource '{builder.Resource.Name}' already has an entry point or endpoint named '{name}'.", nameof(name));
+        }
 
         if (scheme is not ("tcp" or "http" or "https" or "udp"))
         {
@@ -582,7 +602,10 @@ public static partial class TraefikBuilderExtensions
         if (certResolver is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(certResolver);
+            TraefikNames.ThrowIfInvalidName(certResolver, "certificate resolver name", nameof(certResolver));
         }
+
+        TraefikNames.ThrowIfInvalidName(entryPoint, "entry point name", nameof(entryPoint));
 
         return builder.PublishAsExternal(
             network,

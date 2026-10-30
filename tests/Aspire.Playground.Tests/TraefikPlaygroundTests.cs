@@ -154,13 +154,30 @@ public partial class TraefikPlaygroundTests(TraefikPlaygroundFixture playground)
     [Fact]
     public async Task UdpRouteReachesEchoServer()
     {
-        // traefik/whoamiudp answers each datagram with "Received: <datagram>".
+        // traefik/whoamiudp answers each datagram with "Received: <datagram>". UDP may drop a datagram, and the fixture
+        // only waits for the HTTP routes, so the datagram is sent again until an answer arrives.
         using var cts = new CancellationTokenSource(TestConstants.DefaultTimeoutTimeSpan);
         using var udp = new UdpClient(AddressFamily.InterNetwork);
-        await udp.SendAsync("hello"u8.ToArray(), new IPEndPoint(IPAddress.Loopback, playground.EchoUdpPort), cts.Token);
-        var result = await udp.ReceiveAsync(cts.Token);
+        var echoServer = new IPEndPoint(IPAddress.Loopback, playground.EchoUdpPort);
 
-        Assert.Equal("Received: hello", Encoding.UTF8.GetString(result.Buffer).Trim());
+        while (true)
+        {
+            await udp.SendAsync("hello"u8.ToArray(), echoServer, cts.Token);
+
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            attempt.CancelAfter(TimeSpan.FromSeconds(2));
+            try
+            {
+                var result = await udp.ReceiveAsync(attempt.Token);
+
+                Assert.Equal("Received: hello", Encoding.UTF8.GetString(result.Buffer).Trim());
+                return;
+            }
+            catch (OperationCanceledException) when (!cts.IsCancellationRequested)
+            {
+                // No answer within this attempt; send the datagram again.
+            }
+        }
     }
 
     private static async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpMethod method, Uri uri, AuthenticationHeaderValue? authorization = null, HttpContent? content = null)
@@ -366,10 +383,18 @@ public sealed class TraefikPlaygroundFixture : IAsyncLifetime
         using var cts = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
         while (true)
         {
-            using var response = await client.GetAsync(uri, cts.Token);
-            if (response.IsSuccessStatusCode)
+            try
             {
-                return;
+                using var response = await client.GetAsync(uri, cts.Token);
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Traefik can reset a connection while it reloads its configuration, or a backend can still be starting.
+                // Both are retried like an error status; the token source bounds the total wait.
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);

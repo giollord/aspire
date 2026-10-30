@@ -217,6 +217,8 @@ public static partial class TraefikMiddlewareExtensions
     private static IResourceBuilder<TraefikMiddlewareResource> SetListOption<T>(IResourceBuilder<TraefikMiddlewareResource> builder, string path, IEnumerable<T>? values, string valuesParameterName)
         where T : class
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(values, valuesParameterName);
 
         object[] items = [.. values];

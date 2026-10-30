@@ -75,9 +75,20 @@ internal static class TraefikUrls
             return true;
         }
 
-        return options.EntryPoint is null
-            ? traefik.GetRouteDefaults(isPublishMode).IsSecure
-            : string.Equals(options.EntryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal);
+        if (options.EntryPoint is not { } entryPoint)
+        {
+            return traefik.GetRouteDefaults(isPublishMode).IsSecure;
+        }
+
+        // An external Traefik's entry points aren't known, so a named one follows the same convention as its default
+        // entry point (see TraefikResource.GetRouteDefaults): only `web` is plain HTTP. The managed Traefik configures
+        // TLS on `websecure` only, so its other entry points serve plain HTTP unless a resolver is set above.
+        if (isPublishMode && traefik is TraefikResource { PublishExternal: not null })
+        {
+            return !string.Equals(entryPoint, TraefikResource.WebEntryPointName, StringComparison.Ordinal);
+        }
+
+        return string.Equals(entryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal);
     }
 
     /// <summary>

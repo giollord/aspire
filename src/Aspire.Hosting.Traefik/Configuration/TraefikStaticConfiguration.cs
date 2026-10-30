@@ -60,7 +60,7 @@ internal static class TraefikStaticConfiguration
         // serves `traefik healthcheck` and external monitoring.
         args.Add("--ping=true");
 
-        AddProviders(args, isPublishMode, traefik.HasPublishFileConfiguration);
+        AddProviders(traefik, args, isPublishMode);
 
         if (isPublishMode && traefik.DockerSocketProxy is { } socketProxy)
         {
@@ -264,7 +264,7 @@ internal static class TraefikStaticConfiguration
 
         if (accessLogs.MinDuration is { } minDuration)
         {
-            args.Add($"--accesslog.filters.minduration={TraefikNames.ToDuration(minDuration, "configure")}");
+            args.Add($"--accesslog.filters.minduration={TraefikNames.ToDuration(minDuration, nameof(TraefikAccessLogOptions.MinDuration))}");
         }
 
         foreach (var header in accessLogs.KeepHeaders)
@@ -273,18 +273,20 @@ internal static class TraefikStaticConfiguration
         }
     }
 
-    private static void AddProviders(IList<object> args, bool isPublishMode, bool hasPublishFileConfiguration)
+    private static void AddProviders(TraefikResource traefik, IList<object> args, bool isPublishMode)
     {
         if (isPublishMode)
         {
             // At publish time routes are labels on the routed services, which only the Docker provider reads.
-            // `exposedbydefault=false` keeps services without `traefik.enable=true` off the proxy.
+            // `exposedbydefault=false` keeps services without `traefik.enable=true` off the proxy, and the constraint
+            // keeps the routes of another managed Traefik in the same deployment off this one.
             // https://doc.traefik.io/traefik/reference/install-configuration/providers/docker/
             args.Add("--providers.docker=true");
             args.Add("--providers.docker.exposedbydefault=false");
+            args.Add($"--providers.docker.constraints={TraefikDockerLabels.GetInstanceConstraint(traefik)}");
         }
 
-        if (!isPublishMode || hasPublishFileConfiguration)
+        if (!isPublishMode || traefik.HasPublishFileConfiguration)
         {
             // In run mode the backends include projects and executables on the host, which have no labels, so the
             // routes are written to a file-provider directory instead (see TraefikDynamicConfiguration). At publish

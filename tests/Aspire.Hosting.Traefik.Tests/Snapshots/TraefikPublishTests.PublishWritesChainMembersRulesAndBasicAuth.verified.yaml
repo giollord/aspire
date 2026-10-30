@@ -9,6 +9,7 @@
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.constraints=Label(`aspire.traefik.traefik`, `true`)"
     ports:
       - "80:80"
     expose:
@@ -28,6 +29,7 @@
       - "aspire"
     labels:
       traefik.enable: "true"
+      aspire.traefik.traefik: "true"
       traefik.http.routers.api.rule: "Host(`api.${DOMAIN}`) && PathPrefix(`/v1`) && (PathRegexp(`^/v1/[a-z]{2,8}$$`) || Method(`OPTIONS`))"
       traefik.http.routers.api.entrypoints: "web"
       traefik.http.routers.api.service: "api"

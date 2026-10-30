@@ -27,7 +27,9 @@ internal static class TraefikRouteRule
 
         if (options.RawRule is { } rawRule)
         {
-            if (HasMatchers(options))
+            // Host may be set next to a raw rule: it isn't added to the rule then, but gives the route its public URL
+            // (GetTraefikUrl) and its oauth2-proxy sign-in route, which a rule string can't provide.
+            if (HasMatchersOtherThanHost(options))
             {
                 throw new ArgumentException($"{nameof(TraefikRouteOptions.RawRule)} can't be combined with other matchers. Write the whole rule in it.");
             }
@@ -86,8 +88,8 @@ internal static class TraefikRouteRule
         return builder.Build();
     }
 
-    private static bool HasMatchers(TraefikRouteOptions options) =>
-        options.Host is not null || options.Path is not null || options.PathPrefix is not null || options.Methods.Count > 0 ||
+    private static bool HasMatchersOtherThanHost(TraefikRouteOptions options) =>
+        options.Path is not null || options.PathPrefix is not null || options.Methods.Count > 0 ||
         options.Headers.Count > 0 || options.Query.Count > 0 || options.ClientIps.Count > 0 || options.Rule is not null;
 
     private static void AddAny(List<TraefikRule> matchers, IEnumerable<TraefikRule> alternatives)

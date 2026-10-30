@@ -12,6 +12,7 @@
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.constraints=Label(`aspire.traefik.traefik`, `true`)"
       - "--providers.file.directory=/etc/traefik/dynamic"
       - "--api.dashboard=true"
       - "--certificatesresolvers.letsencrypt.acme.email=admin@example.com"
@@ -50,6 +51,7 @@
       - "aspire"
     labels:
       traefik.enable: "true"
+      aspire.traefik.traefik: "true"
       traefik.http.routers.api.rule: "Host(`api.${DOMAIN}`)"
       traefik.http.routers.api.entrypoints: "websecure"
       traefik.http.routers.api.service: "api"

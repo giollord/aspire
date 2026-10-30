@@ -136,7 +136,7 @@ public class TraefikMiddlewareTypesTests(ITestOutputHelper testOutputHelper)
 
         var exception = Assert.Throws<ArgumentException>(() => api.WithTraefikRoute(traefik, route =>
         {
-            route.Host = ReferenceExpression.Create($"api.dev.localhost");
+            route.PathPrefix = "/api";
             route.RawRule = "Host(`api.dev.localhost`)";
         }));
         Assert.Equal("RawRule can't be combined with other matchers. Write the whole rule in it. (Parameter 'configure')", exception.Message);

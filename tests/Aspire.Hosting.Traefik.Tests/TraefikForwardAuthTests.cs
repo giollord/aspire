@@ -140,6 +140,67 @@ public class TraefikForwardAuthTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public void HostRoutedOverHttpAndHttpsGetsSignInRouteOnEachEntryPoint()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+        var sso = traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "client", builder.AddParameter("client-secret", "secret", secret: true));
+
+        // The callback comes back on the entry point the user signed in from. The third route names `websecure`, which is
+        // already the default entry point of the second, so it needs no route of its own.
+        builder.AddContainer("app", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"app.dev.localhost");
+                route.EntryPoint = TraefikResource.WebEntryPointName;
+                route.Middlewares.Add(sso.Resource);
+            })
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"app.dev.localhost");
+                route.Middlewares.Add(sso.Resource);
+            })
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"app.dev.localhost");
+                route.PathPrefix = "/admin";
+                route.EntryPoint = TraefikResource.WebSecureEntryPointName;
+                route.Middlewares.Add(sso.Resource);
+            });
+
+        using var app = builder.Build();
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false);
+
+        var proxy = builder.Resources.OfType<ContainerResource>().Single(r => r.Name == "sso-proxy");
+        Assert.Collection(
+            proxy.Annotations.OfType<TraefikRouteAnnotation>().Where(a => a.IsSignInRoute),
+            web => Assert.Equal(("sso-proxy-1", "web"), (web.Options.RouterName, web.Options.EntryPoint)),
+            websecure => Assert.Equal(("sso-proxy-2", (string?)null), (websecure.Options.RouterName, websecure.Options.EntryPoint)));
+        Assert.Single(sso.Resource.ProtectedHosts);
+        Assert.True(sso.Resource.ProtectsPlainHttp);
+    }
+
+    [Fact]
+    public void OAuth2ProxyNameClashLeavesModelUnchanged()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+        var clientSecret = builder.AddParameter("client-secret", "secret", secret: true);
+        builder.AddContainer("SSO-proxy", "image");
+        var resourceNames = builder.Resources.Select(r => r.Name).ToList();
+
+        var exception = Assert.Throws<ArgumentException>(() => traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "client", clientSecret));
+        Assert.Equal("The oauth2-proxy middleware 'sso' needs the resource name 'sso-proxy', which resource 'SSO-proxy' already has. (Parameter 'name')", exception.Message);
+        Assert.Equal(resourceNames, builder.Resources.Select(r => r.Name));
+        Assert.Empty(traefik.Resource.Middlewares);
+    }
+
+    [Fact]
     public async Task PublishResolvesForwardAuthAddressAndJoinsExternalNetwork()
     {
         using var workspace = TemporaryWorkspace.Create(testOutputHelper);

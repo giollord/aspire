@@ -185,6 +185,36 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public void WithEntryPointRejectsNameUsedTwice()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithEntryPoint("echo", targetPort: 9000);
+
+        // Endpoint names are case-insensitive, so a different case is the same entry point.
+        var exception = Assert.Throws<ArgumentException>(() => traefik.WithEntryPoint("Echo", targetPort: 9001, scheme: "udp"));
+        Assert.Equal("Traefik resource 'traefik' already has an entry point or endpoint named 'Echo'. (Parameter 'name')", exception.Message);
+        Assert.Collection(traefik.Resource.CustomEntryPoints, entryPoint => Assert.Equal((9000, false), (entryPoint.TargetPort, entryPoint.IsUdp)));
+    }
+
+    [Theory]
+    [InlineData(0, null, "targetPort ('0') must be greater than or equal to '1'. (Parameter 'targetPort')\nActual value was 0.")]
+    [InlineData(65536, null, "targetPort ('65536') must be less than or equal to '65535'. (Parameter 'targetPort')\nActual value was 65536.")]
+    [InlineData(9000, 0, "port ('0') must be greater than or equal to '1'. (Parameter 'port')\nActual value was 0.")]
+    [InlineData(9000, 70000, "port ('70000') must be less than or equal to '65535'. (Parameter 'port')\nActual value was 70000.")]
+    public void WithEntryPointRejectsPortsOutOfRange(int targetPort, int? port, string message)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => traefik.WithEntryPoint("echo", targetPort, port));
+        Assert.Equal(message, exception.Message.ReplaceLineEndings("\n"));
+        Assert.Empty(traefik.Resource.CustomEntryPoints);
+    }
+
+    [Fact]
     public void WithDashboardAddsDashboardUrl()
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);

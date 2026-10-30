@@ -177,12 +177,24 @@ public static class TraefikForwardAuthExtensions
 
         var applicationBuilder = builder.ApplicationBuilder;
         var traefik = builder.Resource;
+        var proxyName = $"{name}-proxy";
+
+        // The container is added before the middleware, which needs its endpoint, so both names are checked first: a
+        // clash found by AddResource would otherwise leave the container in the model without its middleware.
+        // Resource names are case-insensitive.
+        foreach (var resourceName in (string[])[name, proxyName])
+        {
+            if (applicationBuilder.Resources.FirstOrDefault(r => string.Equals(r.Name, resourceName, StringComparison.OrdinalIgnoreCase)) is { } existing)
+            {
+                throw new ArgumentException($"The oauth2-proxy middleware '{name}' needs the resource name '{resourceName}', which resource '{existing.Name}' already has.", nameof(name));
+            }
+        }
 
         // The secret encrypts the session cookie; oauth2-proxy needs exactly 16, 24, or 32 bytes.
         var cookieSecret = ParameterResourceBuilderExtensions.CreateGeneratedParameter(
             applicationBuilder, $"{name}-cookie-secret", secret: true, new GenerateParameterDefault { MinLength = 32, Special = false });
 
-        var proxy = applicationBuilder.AddContainer($"{name}-proxy", TraefikContainerImageTags.OAuth2ProxyImage, TraefikContainerImageTags.OAuth2ProxyTag)
+        var proxy = applicationBuilder.AddContainer(proxyName, TraefikContainerImageTags.OAuth2ProxyImage, TraefikContainerImageTags.OAuth2ProxyTag)
             .WithImageRegistry(TraefikContainerImageTags.OAuth2ProxyRegistry)
             .WithIconName("PersonLock")
             .WithHttpEndpoint(targetPort: OAuth2ProxyPort, name: OAuth2ProxyEndpointName)

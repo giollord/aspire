@@ -9,6 +9,7 @@
       - "--ping=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.constraints=Label(`aspire.traefik.traefik`, `true`)"
     ports:
       - "80:80"
     expose:
@@ -28,6 +29,7 @@
       - "aspire"
     labels:
       traefik.enable: "true"
+      aspire.traefik.traefik: "true"
       traefik.http.routers.web.rule: "Host(`web.example.com`)"
       traefik.http.routers.web.entrypoints: "web"
       traefik.http.routers.web.service: "web"
@@ -48,6 +50,7 @@
       - "aspire"
     labels:
       traefik.enable: "true"
+      aspire.traefik.traefik: "true"
       traefik.http.routers.grpc.rule: "Host(`grpc.example.com`)"
       traefik.http.routers.grpc.entrypoints: "web"
       traefik.http.routers.grpc.service: "grpc"

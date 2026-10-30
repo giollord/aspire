@@ -89,6 +89,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             }
 
             var resourceWithEndpoints = GetRoutedResource(resource);
+            var deploysToDockerCompose = publishesToDockerCompose && DeploysToDockerCompose(model, resource);
             var routes = new List<TraefikRoute>(annotations.Count);
             var resourceMiddlewares = resource.Annotations.OfType<TraefikMiddlewareAnnotation>().Select(a => a.Middleware).ToList();
 
@@ -135,7 +136,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 annotation.Traefik.Routes.Add(route);
                 routes.Add(route);
 
-                if (publishesToDockerCompose)
+                if (deploysToDockerCompose)
                 {
                     if (resource is IResourceWithEnvironment resourceWithEnvironment)
                     {
@@ -148,7 +149,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 }
             }
 
-            if (publishesToDockerCompose)
+            if (deploysToDockerCompose)
             {
                 var middlewares = routes.SelectMany(r => r.Middlewares).SelectMany(m => m.WithReferences()).Distinct().ToList();
 
@@ -229,7 +230,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     }
 
                     var isSecure = TraefikUrls.IsSecure(annotation.Traefik, annotation.Options, isPublishMode);
-                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint, isSecure);
+                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint, isSecure, isPublishMode);
                 }
             }
         }
@@ -244,32 +245,46 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
             foreach (var middleware in traefik.DashboardMiddlewares.SelectMany(m => m.WithReferences()).Where(m => m.OAuth2Proxy is not null).Distinct())
             {
-                AddSignInRoute(middleware, traefik, host, entryPoint: null, ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).IsSecure);
+                AddSignInRoute(middleware, traefik, host, entryPoint: null, ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).IsSecure, isPublishMode);
             }
         }
 
-        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint, bool isSecure)
+        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint, bool isSecure, bool isPublishMode)
         {
-            // Before the duplicate check: the same host can be routed over both HTTP and HTTPS.
             middleware.ProtectsPlainHttp |= !isSecure;
 
-            // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once.
-            if (middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
+            // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once. The list
+            // feeds oauth2-proxy's --whitelist-domain, which doesn't depend on the entry point.
+            if (!middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
             {
-                return;
+                middleware.ProtectedHosts.Add(host);
             }
 
             // Only middlewares added by AddOAuth2ProxyForwardAuth are passed here, and they all have the container.
             var proxy = middleware.OAuth2Proxy!;
 
-            middleware.ProtectedHosts.Add(host);
+            // The callback comes back on the entry point the user signed in from, so a host routed over both HTTP and
+            // HTTPS needs a sign-in route on each. A route without an entry point uses Traefik's default one, so it
+            // counts as that entry point and doesn't add a second router with the same rule.
+            // https://oauth2-proxy.github.io/oauth2-proxy/configuration/integrations/traefik
+            // The proxy belongs to one middleware, so all its sign-in routes go through the same Traefik.
+            var defaultEntryPoint = ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).EntryPoint.ValueExpression;
+            var signInRoutes = proxy.Annotations.OfType<TraefikRouteAnnotation>().Where(a => a.IsSignInRoute).ToList();
+
+            // Sign-in routes always have a host: AddSignInRoutes checks it before calling this method.
+            if (signInRoutes.Any(a => a.Options.Host!.ValueExpression == host.ValueExpression &&
+                (a.Options.EntryPoint ?? defaultEntryPoint) == (entryPoint ?? defaultEntryPoint)))
+            {
+                return;
+            }
+
             proxy.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
             {
                 Host = host,
                 PathPrefix = TraefikForwardAuthExtensions.OAuth2ProxyPrefix,
                 Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
                 EntryPoint = entryPoint,
-                RouterName = $"{proxy.Name}-{middleware.ProtectedHosts.Count}",
+                RouterName = $"{proxy.Name}-{signInRoutes.Count + 1}",
             }, isSignInRoute: true));
         }
     }
@@ -305,6 +320,21 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 Target = $"{TraefikResource.DynamicConfigurationDirectory}/{TraefikDynamicConfiguration.FileName}",
             });
         }));
+    }
+
+    private static bool DeploysToDockerCompose(DistributedApplicationModel model, IResource resource)
+    {
+        // The labels and the temporary variables that carry ports into them only make sense for a Docker Compose
+        // service. A resource bound to another compute environment, such as Kubernetes, would keep the variables in
+        // its deployment, because only the Docker Compose customizations remove them again.
+        if (resource.GetComputeEnvironment() is { } environment)
+        {
+            return environment is DockerComposeEnvironmentResource;
+        }
+
+        // Without an explicit environment the resource goes to the only one; with several, the publishers report the
+        // ambiguity themselves, unless all of them are Docker Compose environments.
+        return model.Resources.OfType<IComputeEnvironmentResource>().All(e => e is DockerComposeEnvironmentResource);
     }
 
     private static IResourceWithEndpoints GetRoutedResource(IResource resource)
@@ -517,6 +547,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             }
 
             var resourceWithEndpoints = GetRoutedResource(resource);
+            var deploysToDockerCompose = publishesToDockerCompose && DeploysToDockerCompose(model, resource);
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
             var routes = new List<TraefikTransportRoute>(annotations.Count);
 
@@ -559,7 +590,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                 traefik.TransportRoutes.Add(route);
                 routes.Add(route);
 
-                if (publishesToDockerCompose)
+                if (deploysToDockerCompose)
                 {
                     if (resource is IResourceWithEnvironment resourceWithEnvironment)
                     {

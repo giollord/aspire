@@ -1,9 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Hosting.Traefik;
+using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.ApplicationModel;
+namespace Aspire.Hosting.Traefik;
 
 /// <summary>
 /// A Traefik router rule, built from matchers combined with <c>&amp;</c> (and), <c>|</c> (or), and <c>!</c> (not).

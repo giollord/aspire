@@ -4,8 +4,10 @@
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Docker;
 using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Tests;
+using Aspire.Hosting.Tests.Utils;
 using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,6 +15,39 @@ namespace Aspire.Hosting.Traefik.Tests;
 
 public class TraefikPublishTests(ITestOutputHelper testOutputHelper)
 {
+    [Fact]
+    public async Task OnlyResourcesDeployedWithDockerComposeGetLabelVariables()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var compose = builder.AddDockerComposeEnvironment("compose");
+        var other = builder.AddResource(new TestComputeEnvironmentResource("other"));
+        var traefik = builder.AddTraefik("traefik");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "api.example.com")
+            .WithComputeEnvironment(compose);
+
+        // The routes' labels are Docker Compose customizations, which another environment ignores, but the variables
+        // that carry ports into them would stay in its deployment.
+        var worker = builder.AddContainer("worker", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "worker.example.com")
+            .WithComputeEnvironment(other);
+
+        using var app = builder.Build();
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: true);
+
+        var apiEnvironment = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(api.Resource, DistributedApplicationOperation.Publish);
+        var workerEnvironment = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(worker.Resource, DistributedApplicationOperation.Publish);
+
+        Assert.Equal(["ASPIRE_TRAEFIK_TARGET_PORT_API"], apiEnvironment.Keys.Where(k => k.StartsWith("ASPIRE_TRAEFIK_", StringComparison.Ordinal)));
+        Assert.Empty(workerEnvironment);
+        Assert.Empty(worker.Resource.Annotations.OfType<DockerComposeServiceCustomizationAnnotation>());
+    }
+
     [Fact]
     public async Task PublishWithManagedTraefikWritesLabels()
     {

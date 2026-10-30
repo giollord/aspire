@@ -266,6 +266,98 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
         Assert.Equal("https://api.example.com", url);
     }
 
+    [Theory]
+    [InlineData(true, "https", "https://api.example.com")]
+    [InlineData(true, "web", "http://api.example.com")]
+    [InlineData(false, "websecure", "https://api.example.com")]
+    [InlineData(false, "web", "http://api.example.com")]
+    public async Task GetTraefikUrlOfRouteWithEntryPointAtPublishTime(bool external, string routeEntryPoint, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik");
+        if (external)
+        {
+            // An external Traefik's HTTPS entry point often isn't called `websecure`. A route that names it explicitly
+            // follows the same rule as the default entry point: only `web` is plain HTTP.
+            traefik.PublishAsExternal("traefik-public", "websecure");
+        }
+        else
+        {
+            traefik.WithLetsEncrypt("admin@example.com");
+        }
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.example.com");
+                route.EntryPoint = routeEntryPoint;
+            });
+
+        var url = await api.GetTraefikUrl().GetValueAsync(CancellationToken.None);
+
+        Assert.Equal(expected, url);
+    }
+
+    [Fact]
+    public async Task RawRuleWithHostKeepsRuleAndGivesPublicUrl()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik");
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"a.example.com");
+                route.RawRule = "Host(`a.example.com`) || Host(`b.example.com`)";
+            });
+
+        var options = api.Resource.Annotations.OfType<TraefikRouteAnnotation>().Single().Options;
+
+        Assert.Equal("Host(`a.example.com`) || Host(`b.example.com`)", await TraefikRouteRule.Build(options).GetValueAsync(CancellationToken.None));
+        Assert.Equal("http://a.example.com", await api.GetTraefikUrl().GetValueAsync(CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("web secure", null, "The entry point name 'web secure' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'configure')")]
+    [InlineData(null, "le$staging", "The certificate resolver name 'le$staging' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'configure')")]
+    public void InvalidRouteEntryPointOrCertResolverThrows(string? entryPoint, string? certResolver, string message)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+        var api = builder.AddContainer("api", "image").WithHttpEndpoint(targetPort: 80);
+
+        var exception = Assert.Throws<ArgumentException>(() => api.WithTraefikRoute(traefik, route =>
+        {
+            route.Host = ReferenceExpression.Create($"api.dev.localhost");
+            route.EntryPoint = entryPoint;
+            route.CertResolver = certResolver;
+        }));
+        Assert.Equal(message, exception.Message);
+        Assert.Empty(api.Resource.Annotations.OfType<TraefikRouteAnnotation>());
+    }
+
+    [Fact]
+    public void InvalidTransportRouteAndExternalNamesThrow()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+        var echo = builder.AddContainer("echo", "image").WithEndpoint(targetPort: 8080, name: "tcp");
+
+        var tcp = Assert.Throws<ArgumentException>(() => echo.WithTraefikTcpRoute(traefik, "echo$tcp"));
+        Assert.Equal("The entry point name 'echo$tcp' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'configure')", tcp.Message);
+
+        var udp = Assert.Throws<ArgumentException>(() => echo.WithTraefikUdpRoute(traefik, "echo udp"));
+        Assert.Equal("The entry point name 'echo udp' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'entryPoint')", udp.Message);
+
+        var external = Assert.Throws<ArgumentException>(() => traefik.PublishAsExternal("traefik-public", "websecure", certResolver: "le.prod"));
+        Assert.Equal("The certificate resolver name 'le.prod' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'certResolver')", external.Message);
+    }
+
     [Fact]
     public void GetTraefikUrlWithoutRouteThrows()
     {
