@@ -32,7 +32,9 @@ const traefik = await builder.addTraefik("traefik")
             await (await logs.statusCodes()).add("400-599");
         },
     })
-    .withDockerSocketProxy();
+    .withDockerSocketProxy()
+    .withDockerSocketPath("/var/run/docker.sock")
+    .withExternalEntryPoint("https", true, { port: 8443 });
 
 const headers = await traefik.addSecurityHeaders("security-headers");
 const compress = await traefik.addCompress("compress");

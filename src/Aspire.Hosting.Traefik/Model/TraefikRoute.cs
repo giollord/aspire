@@ -25,6 +25,21 @@ internal interface ITraefikRouteTarget
     /// <param name="isPublishMode">Whether the routes are for the published application.</param>
     /// <returns>The defaults.</returns>
     TraefikRouteDefaults GetRouteDefaults(bool isPublishMode);
+
+    /// <summary>
+    /// Determines whether clients reach an entry point over TLS.
+    /// </summary>
+    /// <param name="entryPoint">The entry point name.</param>
+    /// <param name="isPublishMode">Whether the entry point is for the published application.</param>
+    /// <returns><see langword="true"/> when the entry point terminates TLS; otherwise, <see langword="false"/>.</returns>
+    bool IsTlsEntryPoint(string entryPoint, bool isPublishMode);
+
+    /// <summary>
+    /// Gets the public port of an entry point at publish time, as clients connect to it.
+    /// </summary>
+    /// <param name="entryPoint">The entry point name.</param>
+    /// <returns>The port, or <see langword="null"/> when it isn't known, in which case the standard port is assumed.</returns>
+    int? GetPublishPort(string entryPoint);
 }
 
 /// <summary>

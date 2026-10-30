@@ -300,6 +300,116 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
         Assert.Equal(expected, url);
     }
 
+    [Theory]
+    [InlineData(null, "https://api.example.com:8443")]
+    [InlineData("http", "http://api.example.com")]
+    [InlineData("edge", "https://api.example.com")]
+    [InlineData("web", "http://api.example.com")]
+    public async Task GetTraefikUrlUsesDescribedExternalEntryPoints(string? routeEntryPoint, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        // `http` isn't called `web`, so only its description makes it plain HTTP. `edge` isn't described and follows
+        // the naming convention.
+        var traefik = builder.AddTraefik("traefik")
+            .WithExternalEntryPoint("http", isTls: false)
+            .WithExternalEntryPoint("https", isTls: true, port: 8443)
+            .PublishAsExternal("traefik-public", "https");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.example.com");
+                route.EntryPoint = routeEntryPoint;
+            });
+
+        var url = await api.GetTraefikUrl().GetValueAsync(CancellationToken.None);
+
+        Assert.Equal(expected, url);
+    }
+
+    [Theory]
+    [InlineData(false, "https://api.example.com:8443")]
+    [InlineData(true, "https://api.example.com:9443")]
+    public async Task GetTraefikUrlIncludesNonStandardPortAtPublishTime(bool customEntryPoint, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com")
+            .WithHostHttpsPort(8443)
+            .WithEntryPoint("admin", targetPort: 9443, scheme: "https");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.example.com");
+                route.EntryPoint = customEntryPoint ? "admin" : null;
+            });
+
+        var url = await api.GetTraefikUrl().GetValueAsync(CancellationToken.None);
+
+        Assert.Equal(expected, url);
+    }
+
+    [Fact]
+    public async Task GetTraefikUrlOfHttpsEntryPointUsesHttpsInRunMode()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithEntryPoint("admin", targetPort: 9443, scheme: "https");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"api.dev.localhost");
+                route.EntryPoint = "admin";
+            });
+
+        EndpointAllocation.Allocate(traefik.Resource, "admin", hostPort: 9443, containerHost: "traefik", containerPort: 9443);
+
+        var url = await api.GetTraefikUrl().GetValueAsync(CancellationToken.None);
+
+        Assert.Equal("https://api.dev.localhost:9443", url);
+    }
+
+    [Fact]
+    public async Task PublishedTraefikUrlBuiltBeforeItsPortChangedThrows()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+
+        var api = builder.AddContainer("api", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "api.example.com");
+
+        var url = api.GetTraefikUrl();
+        traefik.WithHostHttpsPort(8443);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () => await url.GetValueAsync(CancellationToken.None));
+        Assert.Equal("A Traefik URL of 'traefik' was built for the standard port, but its entry point is now published on port 8443. Configure Traefik's ports and entry points (WithHostPort, WithHostHttpsPort, WithEntryPoint, WithExternalEntryPoint) before calling GetTraefikUrl.", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("bad.name", null, typeof(ArgumentException), "The entry point name 'bad.name' is invalid. Use letters, digits, '-' and '_' only. (Parameter 'name')")]
+    [InlineData("https", 0, typeof(ArgumentOutOfRangeException), "port ('0') must be greater than or equal to '1'. (Parameter 'port')\nActual value was 0.")]
+    public void InvalidExternalEntryPointThrows(string name, int? port, Type exceptionType, string message)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var exception = Assert.Throws(exceptionType, () => traefik.WithExternalEntryPoint(name, isTls: true, port));
+        Assert.Equal(message, exception.Message.ReplaceLineEndings("\n"));
+        Assert.Empty(traefik.Resource.ExternalEntryPoints);
+    }
+
     [Fact]
     public async Task RawRuleWithHostKeepsRuleAndGivesPublicUrl()
     {

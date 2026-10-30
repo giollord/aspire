@@ -60,6 +60,37 @@ public class TraefikHardeningTests(ITestOutputHelper testOutputHelper)
         await Verify(File.ReadAllText(Path.Combine(workspace.Path, "docker-compose.yaml")), "yaml");
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void WithDockerSocketPathMountsThatSocket(bool socketProxy, bool socketProxyFirst)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik");
+        if (socketProxy && socketProxyFirst)
+        {
+            traefik.WithDockerSocketProxy();
+        }
+
+        traefik.WithDockerSocketPath("/run/user/1000/docker.sock");
+        if (socketProxy && !socketProxyFirst)
+        {
+            traefik.WithDockerSocketProxy();
+        }
+
+        IResource mounted = socketProxy ? traefik.Resource.DockerSocketProxy! : traefik.Resource;
+        Assert.Collection(
+            mounted.Annotations.OfType<ContainerMountAnnotation>(),
+            mount => Assert.Equal(("/run/user/1000/docker.sock", "/var/run/docker.sock", true), (mount.Source, mount.Target, mount.IsReadOnly)));
+
+        if (socketProxy)
+        {
+            Assert.Empty(traefik.Resource.Annotations.OfType<ContainerMountAnnotation>());
+        }
+    }
+
     [Fact]
     public async Task DockerSocketProxyIsNotPublishedWithExternalTraefik()
     {

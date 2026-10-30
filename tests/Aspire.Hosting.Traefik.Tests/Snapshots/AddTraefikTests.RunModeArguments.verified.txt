@@ -3,6 +3,8 @@
   --entrypoints.websecure.address=:443,
   --entrypoints.traefik.address=:8080,
   --entrypoints.amqps.address=:5671,
+  --entrypoints.admin.address=:9443,
+  --entrypoints.admin.http.tls=true,
   --entrypoints.websecure.http.tls=true,
   --entrypoints.web.http.redirections.entrypoint.to=:8443,
   --entrypoints.web.http.redirections.entrypoint.scheme=https,

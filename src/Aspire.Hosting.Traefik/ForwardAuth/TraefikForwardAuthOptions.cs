@@ -126,4 +126,46 @@ public sealed class TraefikOAuth2ProxyOptions
     /// Gets or sets a value indicating whether users whose email address isn't verified by the provider may sign in.
     /// </summary>
     public bool AllowUnverifiedEmail { get; set; }
+
+    /// <summary>
+    /// Gets or sets the path oauth2-proxy serves its sign-in, callback, and sign-out pages under on every protected host.
+    /// Defaults to <c>/oauth2</c>.
+    /// </summary>
+    /// <remarks>
+    /// Requests under this path on a protected host go to oauth2-proxy instead of the routed resource, so change it when
+    /// a protected application has its own <c>/oauth2</c> paths. The redirect URI to register with the provider is
+    /// <c>&lt;public URL of the host&gt;&lt;ProxyPrefix&gt;/callback</c>.
+    /// </remarks>
+    public string ProxyPrefix { get; set; } = "/oauth2";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the session cookie is <c>Secure</c>, which browsers only send over HTTPS.
+    /// When unset, it is <c>Secure</c> unless a protected route is served over plain HTTP.
+    /// </summary>
+    public bool? CookieSecure { get; set; }
+
+    /// <summary>
+    /// Gets or sets the name of the session cookie. When unset, oauth2-proxy uses <c>_oauth2_proxy</c>.
+    /// </summary>
+    /// <remarks>
+    /// Give each oauth2-proxy middleware its own name when they share a cookie domain, so their sessions don't overwrite each other.
+    /// </remarks>
+    public string? CookieName { get; set; }
+
+    /// <summary>
+    /// Gets the domains the session cookie is set for, for example <c>.example.com</c> to sign in once for every
+    /// subdomain. When empty, the cookie belongs to the host that set it.
+    /// </summary>
+    public IList<string> CookieDomains { get; } = [];
+
+    /// <summary>
+    /// Gets more command-line arguments passed to oauth2-proxy, for example <c>--session-store-type=redis</c>. They are
+    /// added after the arguments the integration sets.
+    /// </summary>
+    /// <remarks>
+    /// Each entry is one argument, passed as it is: no shell splits it, and a <c>$</c> stays literal in the published
+    /// Docker Compose file. The arguments are shown in the dashboard and written to the published files, so pass secrets
+    /// as environment variables instead. See <see href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview"/>.
+    /// </remarks>
+    public IList<string> AdditionalArguments { get; } = [];
 }

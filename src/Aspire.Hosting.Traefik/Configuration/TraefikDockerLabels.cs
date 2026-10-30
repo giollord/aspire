@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Resources.ComposeNodes;
@@ -335,6 +336,95 @@ internal static class TraefikDockerLabels
     /// <param name="value">Literal text.</param>
     /// <returns>The text with every <c>$</c> doubled.</returns>
     public static string EscapeLiteral(string value) => value.Replace("$", "$$", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Escapes <c>$</c> in the literal text of the arguments added from <paramref name="start"/> on, so Docker Compose
+    /// doesn't interpolate it.
+    /// </summary>
+    /// <param name="args">The arguments of a container at publish time.</param>
+    /// <param name="start">The index of the first argument to escape, so arguments added by other callbacks keep theirs.</param>
+    /// <remarks>
+    /// Docker Compose interpolates <c>$VAR</c> and <c>${VAR}</c> in <c>command</c> too, and the Compose publisher only
+    /// escapes the commands of shell-form containers, so a literal such as <c>ops$team@example.com</c> would lose
+    /// <c>$team</c>, and <c>${HOME}</c> would take the deploying machine's value. Parameters, endpoints, and other
+    /// values become placeholders that Compose must still fill in, so only literal text is escaped.
+    /// https://docs.docker.com/reference/compose-file/interpolation/
+    /// </remarks>
+    public static void EscapeArguments(IList<object> args, int start)
+    {
+        for (var i = start; i < args.Count; i++)
+        {
+            args[i] = args[i] switch
+            {
+                string text => EscapeLiteral(text),
+                ReferenceExpression expression => EscapeLiterals(expression),
+                var other => other,
+            };
+        }
+    }
+
+    /// <summary>
+    /// Returns an expression whose literal text, including the text of nested expressions and of both branches of a
+    /// conditional, has every <c>$</c> doubled. Value providers are kept.
+    /// </summary>
+    /// <param name="expression">The expression.</param>
+    /// <returns>The escaped expression.</returns>
+    public static ReferenceExpression EscapeLiterals(ReferenceExpression expression)
+    {
+        if (expression.IsConditional)
+        {
+            return ReferenceExpression.CreateConditional(
+                expression.Condition!,
+                expression.MatchValue!,
+                EscapeLiterals(expression.WhenTrue!),
+                EscapeLiterals(expression.WhenFalse!));
+        }
+
+        // Format is a composite format string, for example `--email={0}@{{x}}`: literal text with `{{` and `}}` for
+        // braces, and `{n}` for value provider n. String formats such as `uri` are kept in StringFormats, not in the
+        // placeholder. ReferenceExpressionBuilder.AppendLiteral escapes braces again.
+        var format = expression.Format;
+        var builder = new ReferenceExpressionBuilder();
+        var literal = new StringBuilder();
+
+        for (var i = 0; i < format.Length; i++)
+        {
+            var c = format[i];
+            if (c is '{' or '}' && i + 1 < format.Length && format[i + 1] == c)
+            {
+                literal.Append(c);
+                i++;
+            }
+            else if (c == '{')
+            {
+                var end = format.IndexOf('}', i);
+                var index = int.Parse(format.AsSpan(i + 1, end - i - 1), CultureInfo.InvariantCulture);
+                var provider = expression.ValueProviders[index];
+
+                AppendLiteral();
+                builder.AppendValueProvider(
+                    provider is ReferenceExpression nested ? EscapeLiterals(nested) : provider,
+                    index < expression.StringFormats.Count ? expression.StringFormats[index] : null);
+                i = end;
+            }
+            else
+            {
+                literal.Append(c);
+            }
+        }
+
+        AppendLiteral();
+        return builder.Build();
+
+        void AppendLiteral()
+        {
+            if (literal.Length > 0)
+            {
+                builder.AppendLiteral(EscapeLiteral(literal.ToString()));
+                literal.Clear();
+            }
+        }
+    }
 
     private static void AddInstanceLabel(IDictionary<string, string> labels, TraefikResource traefik)
     {

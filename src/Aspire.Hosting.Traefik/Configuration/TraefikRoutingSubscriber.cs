@@ -206,6 +206,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             {
                 middleware.ProtectedHosts.Clear();
                 middleware.ProtectsPlainHttp = false;
+                middleware.ProtectsNonStandardPort = false;
             }
         }
 
@@ -229,8 +230,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                         throw new InvalidOperationException($"A Traefik route of resource '{resource.Name}' uses the oauth2-proxy middleware '{middleware.Name}', but has no host. The sign-in callback needs one.");
                     }
 
-                    var isSecure = TraefikUrls.IsSecure(annotation.Traefik, annotation.Options, isPublishMode);
-                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint, isSecure, isPublishMode);
+                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options, isPublishMode);
                 }
             }
         }
@@ -245,13 +245,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
             foreach (var middleware in traefik.DashboardMiddlewares.SelectMany(m => m.WithReferences()).Where(m => m.OAuth2Proxy is not null).Distinct())
             {
-                AddSignInRoute(middleware, traefik, host, entryPoint: null, ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).IsSecure, isPublishMode);
+                AddSignInRoute(middleware, traefik, host, new TraefikRouteOptions { Host = host }, isPublishMode);
             }
         }
 
-        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint, bool isSecure, bool isPublishMode)
+        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, TraefikRouteOptions protectedRoute, bool isPublishMode)
         {
-            middleware.ProtectsPlainHttp |= !isSecure;
+            var entryPoint = protectedRoute.EntryPoint;
+            middleware.ProtectsPlainHttp |= !TraefikUrls.IsSecure(traefik, protectedRoute, isPublishMode);
+            middleware.ProtectsNonStandardPort |= isPublishMode && TraefikUrls.GetNonStandardPublishPort(traefik, protectedRoute) is not null;
 
             // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once. The list
             // feeds oauth2-proxy's --whitelist-domain, which doesn't depend on the entry point.
@@ -281,7 +283,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             proxy.Annotations.Add(new TraefikRouteAnnotation(traefik, new TraefikRouteOptions
             {
                 Host = host,
-                PathPrefix = TraefikForwardAuthExtensions.OAuth2ProxyPrefix,
+                PathPrefix = middleware.OAuth2ProxyPrefix,
                 Priority = TraefikForwardAuthExtensions.SignInRoutePriority,
                 EntryPoint = entryPoint,
                 RouterName = $"{proxy.Name}-{signInRoutes.Count + 1}",
@@ -366,17 +368,12 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
     private static void ValidateEntryPoint(TraefikResource traefik, IResource resource, string routerName, string entryPoint, string kind, bool isUdp)
     {
-        var custom = traefik.CustomEntryPoints.FirstOrDefault(e => e.Name == entryPoint);
-        var exists = custom is not null
-            || entryPoint == TraefikResource.WebEntryPointName
-            || (entryPoint == TraefikResource.WebSecureEntryPointName && traefik.HasWebSecureEntryPoint);
-
-        if (!exists)
+        if (!traefik.HasEntryPoint(entryPoint))
         {
             throw new InvalidOperationException($"The Traefik {kind} route '{routerName}' of resource '{resource.Name}' uses the entry point '{entryPoint}', which '{traefik.Name}' doesn't have. Add it with WithEntryPoint, or WithLetsEncrypt for '{TraefikResource.WebSecureEntryPointName}'.");
         }
 
-        if (isUdp != (custom?.IsUdp ?? false))
+        if (isUdp != traefik.CustomEntryPoints.Any(e => e.Name == entryPoint && e.IsUdp))
         {
             throw new InvalidOperationException(isUdp
                 ? $"The Traefik UDP route '{routerName}' of resource '{resource.Name}' needs a UDP entry point, but '{entryPoint}' listens for TCP. Add one with WithEntryPoint(name, targetPort, scheme: \"udp\")."

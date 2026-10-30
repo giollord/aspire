@@ -90,13 +90,30 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
             .WithDashboard()
             .WithLetsEncrypt("admin@example.com")
             .WithHttpsRedirect()
-            .WithEntryPoint("amqps", targetPort: 5671);
+            .WithEntryPoint("amqps", targetPort: 5671)
+            .WithEntryPoint("admin", targetPort: 9443, scheme: "https");
 
         EndpointAllocation.Allocate(traefik.Resource, "websecure", hostPort: 8443, containerHost: "traefik", containerPort: 443);
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(traefik.Resource);
 
         await Verify(args);
+    }
+
+    [Fact]
+    public async Task HttpsEntryPointUsesDefaultResolverAtPublishTime()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com")
+            .WithEntryPoint("admin", targetPort: 9443, scheme: "https");
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(traefik.Resource, DistributedApplicationOperation.Publish);
+
+        Assert.Equal(
+            ["--entrypoints.admin.address=:9443", "--entrypoints.admin.http.tls.certresolver=letsencrypt"],
+            args.Where(a => a.StartsWith("--entrypoints.admin.", StringComparison.Ordinal)));
     }
 
     [Fact]

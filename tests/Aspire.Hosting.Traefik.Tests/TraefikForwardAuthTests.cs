@@ -235,6 +235,85 @@ public class TraefikForwardAuthTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public async Task OAuth2ProxyOptionsSetPrefixCookieAndMoreArguments()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+        var sso = traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "client", builder.AddParameter("client-secret", "secret", secret: true), options =>
+        {
+            options.ProxyPrefix = "/sso";
+            options.CookieSecure = true;
+            options.CookieName = "_app_session";
+            options.CookieDomains.Add(".dev.localhost");
+            options.AdditionalArguments.Add("--session-store-type=redis");
+        });
+
+        builder.AddContainer("app", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "app.dev.localhost")
+            .WithTraefikMiddleware(sso);
+
+        using var app = builder.Build();
+
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false);
+
+        var proxy = builder.Resources.OfType<ContainerResource>().Single(r => r.Name == "sso-proxy");
+        var args = await ArgumentEvaluator.GetArgumentListAsync(proxy, app.Services);
+
+        await Verify(new
+        {
+            Args = args,
+            SignInRoutes = proxy.Annotations.OfType<TraefikRouteAnnotation>().Select(a => a.Options.PathPrefix),
+        });
+    }
+
+    [Theory]
+    [InlineData("sso", "The proxy prefix 'sso' must start with '/'. (Parameter 'configure')")]
+    [InlineData("/", "The proxy prefix '/' can't end with '/' or contain '`'. (Parameter 'configure')")]
+    [InlineData("/sso/", "The proxy prefix '/sso/' can't end with '/' or contain '`'. (Parameter 'configure')")]
+    public void OAuth2ProxyWithInvalidProxyPrefixThrows(string proxyPrefix, string message)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var clientSecret = builder.AddParameter("client-secret", "secret", secret: true);
+        var traefik = builder.AddTraefik("traefik");
+
+        var exception = Assert.Throws<ArgumentException>(() => traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "web", clientSecret,
+            options => options.ProxyPrefix = proxyPrefix));
+        Assert.Equal(message, exception.Message);
+    }
+
+    [Theory]
+    [InlineData(null, "--whitelist-domain=app.example.com")]
+    [InlineData(8443, "--whitelist-domain=app.example.com:*")]
+    public async Task OAuth2ProxyAllowsRedirectsToNonStandardPublishedPort(int? port, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .PublishAsExternal("traefik-public", "https")
+            .WithExternalEntryPoint("https", isTls: true, port);
+        var sso = traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "client", builder.AddParameter("client-secret", "secret", secret: true));
+
+        builder.AddContainer("app", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "app.example.com")
+            .WithTraefikMiddleware(sso);
+
+        using var app = builder.Build();
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: true);
+
+        var proxy = builder.Resources.OfType<ContainerResource>().Single(r => r.Name == "sso-proxy");
+        var args = await ArgumentEvaluator.GetArgumentListAsync(proxy, DistributedApplicationOperation.Publish, app.Services);
+
+        Assert.Equal(expected, Assert.Single(args, a => a.StartsWith("--whitelist-domain=", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void OAuth2ProxyRouteWithoutHostThrows()
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);

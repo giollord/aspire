@@ -13,16 +13,10 @@ public static class TraefikForwardAuthExtensions
 {
     /// <summary>
     /// The priority of the sign-in routes: above the default (the rule length) of any realistic rule, so
-    /// <c>/oauth2/*</c> on a protected host always reaches oauth2-proxy rather than the protected backend.
+    /// <c>/oauth2/*</c> (or another <see cref="TraefikOAuth2ProxyOptions.ProxyPrefix"/>) on a protected host always
+    /// reaches oauth2-proxy rather than the protected backend.
     /// </summary>
     internal const int SignInRoutePriority = 1_000_000;
-
-    /// <summary>
-    /// The path oauth2-proxy serves its sign-in, callback, and sign-out pages under, the default of
-    /// <c>--proxy-prefix</c>. See
-    /// <see href="https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options"/>.
-    /// </summary>
-    internal const string OAuth2ProxyPrefix = "/oauth2";
 
     private const int OAuth2ProxyPort = 4180;
 
@@ -141,7 +135,7 @@ public static class TraefikForwardAuthExtensions
     /// A request without a session is redirected to the provider. After signing in, the provider redirects the browser
     /// to <c>/oauth2/callback</c> on the protected host, so every host that uses the middleware also gets a route for
     /// <c>/oauth2/*</c> to oauth2-proxy. Register <c>&lt;public URL of each protected host&gt;/oauth2/callback</c> as a redirect
-    /// URI with the provider.
+    /// URI with the provider. <see cref="TraefikOAuth2ProxyOptions.ProxyPrefix"/> changes the <c>/oauth2</c> path.
     /// </para>
     /// <para>
     /// The signed-in user is passed to the backend in the <c>X-Auth-Request-User</c>, <c>X-Auth-Request-Email</c>,
@@ -168,6 +162,15 @@ public static class TraefikForwardAuthExtensions
 
         var options = new TraefikOAuth2ProxyOptions();
         configure?.Invoke(options);
+
+        // The prefix becomes a PathPrefix matcher of the sign-in routes, and oauth2-proxy appends `/callback` and
+        // the other pages to it, so a trailing `/` or the root would take over every path of the protected hosts.
+        // https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options
+        TraefikNames.ThrowIfInvalidPath(options.ProxyPrefix, "proxy prefix", nameof(configure));
+        if (options.ProxyPrefix.EndsWith('/') || options.ProxyPrefix.Contains('`'))
+        {
+            throw new ArgumentException($"The proxy prefix '{options.ProxyPrefix}' can't end with '/' or contain '`'.", nameof(configure));
+        }
 
         var discoveryUrls = (options.LoginUrl, options.RedeemUrl, options.JwksUrl);
         if (discoveryUrls is not (null, null, null) && discoveryUrls is not (not null, not null, not null))
@@ -213,13 +216,16 @@ public static class TraefikForwardAuthExtensions
         });
 
         middleware.Resource.OAuth2Proxy = proxy.Resource;
+        middleware.Resource.OAuth2ProxyPrefix = options.ProxyPrefix;
         proxy.WithParentRelationship(middleware);
 
         proxy.WithArgs(context =>
         {
             // https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options
             var args = context.Args;
+            var start = args.Count;
             args.Add($"--http-address=0.0.0.0:{OAuth2ProxyPort}");
+            args.Add($"--proxy-prefix={options.ProxyPrefix}");
             args.Add($"--provider={options.Provider}");
             args.Add($"--client-id={clientId}");
             args.Add(ReferenceExpression.Create($"--oidc-issuer-url={issuerUrl}"));
@@ -243,18 +249,28 @@ public static class TraefikForwardAuthExtensions
 
             // One cookie serves every protected host, so it is only Secure when none of them is plain HTTP, for example
             // when HTTPS is Traefik's default but a route sets EntryPoint to `web`.
-            var isSecure = !middleware.Resource.ProtectsPlainHttp
-                && ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure;
+            var isSecure = options.CookieSecure ?? (!middleware.Resource.ProtectsPlainHttp
+                && ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure);
             args.Add($"--cookie-secure={TraefikNames.ToLiteral(isSecure)}");
+
+            if (options.CookieName is { } cookieName)
+            {
+                args.Add($"--cookie-name={cookieName}");
+            }
+
+            foreach (var cookieDomain in options.CookieDomains)
+            {
+                args.Add($"--cookie-domain={ToListValue(cookieDomain)}");
+            }
 
             foreach (var domain in options.AllowedEmailDomains.DefaultIfEmpty("*"))
             {
-                args.Add($"--email-domain={domain}");
+                args.Add($"--email-domain={ToListValue(domain)}");
             }
 
             foreach (var group in options.AllowedGroups)
             {
-                args.Add($"--allowed-group={group}");
+                args.Add($"--allowed-group={ToListValue(group)}");
             }
 
             if (options.Scope is { } scope)
@@ -267,12 +283,26 @@ public static class TraefikForwardAuthExtensions
                 args.Add("--insecure-oidc-allow-unverified-email=true");
             }
 
-            // After signing in, oauth2-proxy only redirects back to allowed domains. In run mode the hosts are reached on
-            // Traefik's random host port.
-            var portSuffix = context.ExecutionContext.IsPublishMode ? "" : ":*";
+            // After signing in, oauth2-proxy only redirects back to allowed domains. A domain without a port only allows
+            // the standard ports, so `:*` is needed in run mode, where the hosts are reached on Traefik's random host
+            // port, and at publish time when an entry point listens on another port, such as 8443.
+            // https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview#command-line-options
+            var portSuffix = context.ExecutionContext.IsPublishMode && !middleware.Resource.ProtectsNonStandardPort ? "" : ":*";
             foreach (var host in middleware.Resource.ProtectedHosts)
             {
                 args.Add(ReferenceExpression.Create($"--whitelist-domain={host}{portSuffix}"));
+            }
+
+            foreach (var argument in options.AdditionalArguments)
+            {
+                args.Add(argument);
+            }
+
+            // Literal values such as a group name reach the compose file's `command`, which Compose interpolates; see
+            // TraefikDockerLabels.EscapeArguments. Run mode passes the arguments to the container as they are.
+            if (context.ExecutionContext.IsPublishMode)
+            {
+                TraefikDockerLabels.EscapeArguments(args, start);
             }
         });
 
@@ -424,4 +454,15 @@ public static class TraefikForwardAuthExtensions
             _ => throw new ArgumentException($"Unsupported type '{address?.GetType().Name}'. Expected an endpoint, a string, or a reference expression.", nameof(address)),
         };
     }
+
+    // oauth2-proxy's list options (`--allowed-group`, `--email-domain`, `--cookie-domain`) are pflag string slices, which
+    // read each value as one CSV record, so `cn=admins,ou=groups` would be two groups. A quoted field keeps its commas,
+    // and a quote inside it is doubled:
+    //   --allowed-group="cn=admins,ou=groups"   -> [cn=admins,ou=groups]
+    //   --allowed-group=say "hi"                -> error: bare quote in a non-quoted field
+    // https://github.com/spf13/pflag/blob/master/string_slice.go and https://pkg.go.dev/encoding/csv
+    private static string ToListValue(string value) =>
+        value.AsSpan().IndexOfAny(",\"\r\n") >= 0
+            ? $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\""
+            : value;
 }

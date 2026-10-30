@@ -25,7 +25,9 @@ void main() throws Exception {
                 logs.setFormat(TraefikAccessLogFormat.JSON);
                 logs.statusCodes().add("400-599");
             })
-            .withDockerSocketProxy();
+            .withDockerSocketProxy()
+            .withDockerSocketPath("/var/run/docker.sock")
+            .withExternalEntryPoint("https", true, new WithExternalEntryPointOptions().port(8443));
 
         var headers = traefik.addSecurityHeaders("security-headers");
         var compress = traefik.addCompress("compress");

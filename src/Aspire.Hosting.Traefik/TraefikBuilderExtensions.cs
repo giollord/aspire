@@ -24,8 +24,6 @@ public static partial class TraefikBuilderExtensions
     /// </summary>
     internal const string SocketProxyEndpointName = "docker";
 
-    private const string DockerSocketPath = "/var/run/docker.sock";
-
     // The prefix of the variables that reference each backend from Traefik's environment in run mode.
     private const string BackendVariablePrefix = "ASPIRE_TRAEFIK_BACKEND_";
 
@@ -93,7 +91,7 @@ public static partial class TraefikBuilderExtensions
         {
             // The Docker provider discovers routed services through the Docker API. Read-only limits what the
             // proxy can do with the socket, but access to it is still powerful; see the README for alternatives.
-            traefik.WithBindMount(DockerSocketPath, DockerSocketPath, isReadOnly: true);
+            traefik.WithBindMount(resource.DockerSocketHostPath, TraefikResource.DockerSocketPath, isReadOnly: true);
 
             traefik.WithAnnotation(new DockerComposeServiceCustomizationAnnotation((_, service) => SetUdpPortProtocols(resource, service)));
 
@@ -269,7 +267,10 @@ public static partial class TraefikBuilderExtensions
     /// <param name="name">The name of the entry point. The resource gets an endpoint with the same name.</param>
     /// <param name="targetPort">The port Traefik listens on inside the container.</param>
     /// <param name="port">The host port. When <see langword="null"/>, a random port is used in run mode and <paramref name="targetPort"/> at publish time.</param>
-    /// <param name="scheme">The scheme of the endpoint: <c>tcp</c>, <c>http</c>, <c>https</c>, or <c>udp</c> for an entry point that receives UDP datagrams.</param>
+    /// <param name="scheme">
+    /// The scheme of the endpoint: <c>tcp</c>, <c>http</c>, <c>https</c> for an entry point that terminates TLS, or
+    /// <c>udp</c> for an entry point that receives UDP datagrams.
+    /// </param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetPort"/> or <paramref name="port"/> isn't between 1 and 65535.</exception>
     /// <exception cref="ArgumentException"><paramref name="name"/> is reserved, invalid, or already used by an endpoint of the resource.</exception>
@@ -277,6 +278,11 @@ public static partial class TraefikBuilderExtensions
     /// <para>
     /// A <c>udp</c> entry point only takes UDP routes (<c>WithTraefikUdpRoute</c>). In run mode its endpoint isn't
     /// proxied by Aspire, which proxies TCP only, so the host port goes straight to Traefik.
+    /// </para>
+    /// <para>
+    /// An <c>https</c> entry point terminates TLS for every HTTP route on it, like <c>websecure</c>, and its routes get
+    /// <c>https</c> URLs. In run mode it serves the Aspire developer certificate. At publish time it uses the default
+    /// certificate resolver of <c>WithLetsEncrypt</c>, or Traefik's self-signed default certificate when there is none.
     /// </para>
     /// <para>
     /// See <see href="https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/"/>.
@@ -318,7 +324,7 @@ public static partial class TraefikBuilderExtensions
         }
 
         var isUdp = scheme == "udp";
-        builder.Resource.CustomEntryPoints.Add(new TraefikEntryPoint(name, targetPort, isUdp));
+        builder.Resource.CustomEntryPoints.Add(new TraefikEntryPoint(name, targetPort, isUdp, IsTls: scheme == "https"));
 
         return builder.WithEndpoint(
             port: port ?? (builder.ApplicationBuilder.ExecutionContext.IsPublishMode ? targetPort : null),
@@ -529,7 +535,7 @@ public static partial class TraefikBuilderExtensions
 
         var proxy = builder.ApplicationBuilder.AddContainer($"{resource.Name}-socket-proxy", TraefikContainerImageTags.SocketProxyImage, TraefikContainerImageTags.SocketProxyTag)
             .WithImageRegistry(TraefikContainerImageTags.SocketProxyRegistry)
-            .WithBindMount(DockerSocketPath, DockerSocketPath, isReadOnly: true)
+            .WithBindMount(resource.DockerSocketHostPath, TraefikResource.DockerSocketPath, isReadOnly: true)
             // Only the container endpoints; EVENTS, PING, and VERSION are allowed by default, and POST requests are not.
             // https://github.com/Tecnativa/docker-socket-proxy#grant-or-revoke-access-to-certain-api-sections
             .WithEnvironment("CONTAINERS", "1")
@@ -539,7 +545,7 @@ public static partial class TraefikBuilderExtensions
         configure?.Invoke(proxy);
         PinDefaultSocketProxyImage(proxy.Resource);
 
-        foreach (var mount in resource.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == DockerSocketPath).ToList())
+        foreach (var mount in resource.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == TraefikResource.DockerSocketPath).ToList())
         {
             resource.Annotations.Remove(mount);
         }
@@ -576,8 +582,9 @@ public static partial class TraefikBuilderExtensions
     /// </para>
     /// <para>
     /// Public URLs use HTTPS unless <paramref name="entryPoint"/> is the literal <c>web</c> and no resolver is set; a
-    /// parameterized entry point is assumed to be HTTPS. When <paramref name="certResolver"/> is not set, the entry point
-    /// is expected to configure TLS itself (<c>entrypoints.&lt;name&gt;.http.tls</c>).
+    /// parameterized entry point is assumed to be HTTPS. Describe entry points that don't follow that convention, or
+    /// that listen on another port than 80 or 443, with <c>WithExternalEntryPoint</c>. When <paramref name="certResolver"/>
+    /// is not set, the entry point is expected to configure TLS itself (<c>entrypoints.&lt;name&gt;.http.tls</c>).
     /// </para>
     /// <para>
     /// The entry point and resolver only appear in <c>traefik.*</c> label values, so they can be parameters, which
@@ -666,6 +673,104 @@ public static partial class TraefikBuilderExtensions
 
             return Task.CompletedTask;
         });
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Describes an entry point of the external Traefik used with <c>PublishAsExternal</c>, so that the public URLs and
+    /// the oauth2-proxy cookie of routes on it use the right scheme and port.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="name">The name of the entry point on the external Traefik.</param>
+    /// <param name="isTls">Whether clients reach the entry point over TLS, which makes the URLs of its routes <c>https</c>.</param>
+    /// <param name="port">The public port clients connect to, or <see langword="null"/> for the standard port of the scheme (80 or 443).</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="port"/> isn't between 1 and 65535.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> isn't a valid entry point name.</exception>
+    /// <remarks>
+    /// <para>
+    /// The external Traefik's configuration isn't visible to Aspire. Without a description, an entry point named
+    /// <c>web</c> is assumed to be plain HTTP and any other one HTTPS, both on the standard port. Describe the entry
+    /// points that don't follow that convention, for example <c>http</c> and <c>https</c>, or one on port 8443.
+    /// Describing an entry point again replaces the description.
+    /// </para>
+    /// <para>
+    /// The description only applies at publish time while the resource is published as external. It doesn't
+    /// configure the external Traefik, and it has no effect in run mode, where Aspire runs its own Traefik.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code lang="csharp">
+    /// var traefik = builder.AddTraefik("traefik")
+    ///     .PublishAsExternal(network: "proxy", entryPoint: "https")
+    ///     .WithExternalEntryPoint("http", isTls: false)
+    ///     .WithExternalEntryPoint("https", isTls: true, port: 8443);
+    /// </code>
+    /// </example>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithExternalEntryPoint(this IResourceBuilder<TraefikResource> builder, string name, bool isTls, int? port = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        TraefikNames.ThrowIfInvalidName(name, "entry point name", nameof(name));
+
+        if (port is { } publicPort)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(publicPort, 1, nameof(port));
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(publicPort, MaxPort, nameof(port));
+        }
+
+        var entryPoints = builder.Resource.ExternalEntryPoints;
+        entryPoints.RemoveAll(e => e.Name == name);
+        entryPoints.Add(new TraefikExternalEntryPoint(name, isTls, port));
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Sets the path of the Docker socket on the deployment host, which Traefik's Docker provider (or the Docker socket
+    /// proxy) mounts at publish time.
+    /// </summary>
+    /// <param name="builder">The Traefik resource builder.</param>
+    /// <param name="hostPath">The path of the socket on the host, for example <c>/run/user/1000/docker.sock</c>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The default, <c>/var/run/docker.sock</c>, is the socket of a rootful Docker Engine. Rootless Docker listens on
+    /// <c>$XDG_RUNTIME_DIR/docker.sock</c>, and Podman on <c>/run/podman/podman.sock</c> (rootful) or
+    /// <c>/run/user/&lt;uid&gt;/podman/podman.sock</c> (rootless). The socket is always mounted at
+    /// <c>/var/run/docker.sock</c> inside the container, where Traefik and the socket proxy expect it.
+    /// </para>
+    /// <para>
+    /// It has no effect in run mode, where Traefik reads a file instead, or with <c>PublishAsExternal</c>, where Traefik
+    /// isn't deployed.
+    /// </para>
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<TraefikResource> WithDockerSocketPath(this IResourceBuilder<TraefikResource> builder, string hostPath)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostPath);
+
+        var resource = builder.Resource;
+        resource.DockerSocketHostPath = hostPath;
+
+        // AddTraefik mounts the socket into Traefik, and WithDockerSocketProxy moves it to the proxy. Both may run
+        // before this method, so the existing mount is replaced wherever it is.
+        foreach (var container in (IResource?[])[resource, resource.DockerSocketProxy])
+        {
+            if (container is null)
+            {
+                continue;
+            }
+
+            foreach (var mount in container.Annotations.OfType<ContainerMountAnnotation>().Where(m => m.Target == TraefikResource.DockerSocketPath).ToList())
+            {
+                container.Annotations.Remove(mount);
+                container.Annotations.Add(new ContainerMountAnnotation(hostPath, TraefikResource.DockerSocketPath, ContainerMountType.BindMount, isReadOnly: true));
+            }
+        }
 
         return builder;
     }

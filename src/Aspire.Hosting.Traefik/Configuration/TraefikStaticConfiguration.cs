@@ -44,6 +44,7 @@ internal static class TraefikStaticConfiguration
     {
         var isPublishMode = context.ExecutionContext.IsPublishMode;
         var args = context.Args;
+        var start = args.Count;
 
         AddEntryPoints(traefik, args, isPublishMode);
 
@@ -115,6 +116,13 @@ internal static class TraefikStaticConfiguration
             // The compose dashboard accepts OTLP without an API key on its internal network.
             AddOtlpArguments(traefik, args, publishOtlpEndpoint, apiKey: null);
         }
+
+        // Literal values such as the ACME email reach the compose file's `command`, which Compose interpolates. In
+        // run mode the arguments go to the container as they are, so escaping there would pass `$$` to Traefik.
+        if (isPublishMode)
+        {
+            TraefikDockerLabels.EscapeArguments(args, start);
+        }
     }
 
     /// <summary>
@@ -144,6 +152,17 @@ internal static class TraefikStaticConfiguration
             // A UDP entry point is written `:5353/udp`; without a suffix it listens for TCP.
             // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#address
             args.Add(FormattableString.Invariant($"--entrypoints.{entryPoint.Name}.address=:{entryPoint.TargetPort}{(entryPoint.IsUdp ? "/udp" : "")}"));
+
+            // An `https` entry point terminates TLS for every HTTP router on it, like `websecure`: run mode with the
+            // default certificate (the Aspire developer certificate), publish time with the default resolver when there
+            // is one, and Traefik's self-signed default certificate otherwise.
+            // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#http-tls
+            if (entryPoint.IsTls)
+            {
+                args.Add(isPublishMode && traefik.DefaultAcmeResolver is { } resolver
+                    ? $"--entrypoints.{entryPoint.Name}.http.tls.certresolver={resolver.Name}"
+                    : $"--entrypoints.{entryPoint.Name}.http.tls=true");
+            }
         }
 
         // The `websecure` entry point exists exactly when a resolver does (see TraefikResource.HasWebSecureEntryPoint).

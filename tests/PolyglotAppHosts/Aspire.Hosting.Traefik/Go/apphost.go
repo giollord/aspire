@@ -41,7 +41,9 @@ func main() {
 				_ = logs.StatusCodes().Add("400-599")
 			},
 		}).
-		WithDockerSocketProxy()
+		WithDockerSocketProxy().
+		WithDockerSocketPath("/var/run/docker.sock").
+		WithExternalEntryPoint("https", true, &aspire.WithExternalEntryPointOptions{Port: aspire.Float64Ptr(8443)})
 
 	headers := traefik.AddSecurityHeaders("security-headers")
 	compress := traefik.AddCompress("compress")

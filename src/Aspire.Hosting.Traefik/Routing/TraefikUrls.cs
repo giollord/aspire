@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting.Traefik;
@@ -21,13 +22,15 @@ internal static class TraefikUrls
     /// <remarks>
     /// <para>
     /// In run mode the entry point's host port is random unless pinned, so the URL includes it. At publish time the
-    /// URL assumes the standard ports (80 for HTTP, 443 for HTTPS) that an internet-facing proxy listens on.
+    /// URL includes the entry point's public port only when it isn't the standard port of the scheme (80 for HTTP, 443
+    /// for HTTPS), for example after <c>WithHostHttpsPort(8443)</c> or <c>WithExternalEntryPoint("https", true, 8443)</c>.
     /// </para>
     /// <para>
     /// The scheme and the port depend on how Traefik is configured, which can still change after the URL is built:
-    /// <c>GetTraefikUrl</c> may be called before <c>WithLetsEncrypt</c> or <c>PublishAsExternal</c>. So both are
-    /// decided when the expression is evaluated, once the model is complete. The scheme is a conditional expression,
-    /// which the Docker Compose publisher resolves while writing the files; the port only exists in run mode.
+    /// <c>GetTraefikUrl</c> may be called before <c>WithLetsEncrypt</c> or <c>PublishAsExternal</c>. The scheme is
+    /// therefore a conditional expression decided when it is evaluated, which the Docker Compose publisher does while
+    /// writing the files. The publisher can't evaluate any other kind of value, so the publish-time port is read
+    /// when the URL is built, and checked again when it is evaluated (see <see cref="PublishPortCondition"/>).
     /// </para>
     /// </remarks>
     public static ReferenceExpression Build(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
@@ -49,6 +52,15 @@ internal static class TraefikUrls
         {
             builder.AppendLiteral(":");
             builder.AppendValueProvider(new HostPort(managed, options));
+        }
+        else if (isPublishMode)
+        {
+            var port = GetNonStandardPublishPort(traefik, options);
+            builder.AppendValueProvider(ReferenceExpression.CreateConditional(
+                new PublishPortCondition(traefik, options, port),
+                bool.TrueString,
+                port is null ? ReferenceExpression.Empty : ReferenceExpression.Create($":{port.Value.ToString(CultureInfo.InvariantCulture)}"),
+                ReferenceExpression.Empty));
         }
 
         if ((options.PathPrefix ?? options.Path) is { } path)
@@ -75,20 +87,27 @@ internal static class TraefikUrls
             return true;
         }
 
-        if (options.EntryPoint is not { } entryPoint)
+        return options.EntryPoint is { } entryPoint
+            ? traefik.IsTlsEntryPoint(entryPoint, isPublishMode)
+            : traefik.GetRouteDefaults(isPublishMode).IsSecure;
+    }
+
+    /// <summary>
+    /// Gets the public port of a route's entry point at publish time when it isn't the standard port of its scheme.
+    /// </summary>
+    /// <param name="traefik">The Traefik the route targets.</param>
+    /// <param name="options">The route options.</param>
+    /// <returns>The port, or <see langword="null"/> for the standard port or a parameterized entry point.</returns>
+    public static int? GetNonStandardPublishPort(ITraefikRouteTarget traefik, TraefikRouteOptions options)
+    {
+        if ((options.EntryPoint ?? TraefikNames.GetLiteral(traefik.GetRouteDefaults(isPublishMode: true).EntryPoint)) is not { } entryPoint
+            || traefik.GetPublishPort(entryPoint) is not { } port)
         {
-            return traefik.GetRouteDefaults(isPublishMode).IsSecure;
+            return null;
         }
 
-        // An external Traefik's entry points aren't known, so a named one follows the same convention as its default
-        // entry point (see TraefikResource.GetRouteDefaults): only `web` is plain HTTP. The managed Traefik configures
-        // TLS on `websecure` only, so its other entry points serve plain HTTP unless a resolver is set above.
-        if (isPublishMode && traefik is TraefikResource { PublishExternal: not null })
-        {
-            return !string.Equals(entryPoint, TraefikResource.WebEntryPointName, StringComparison.Ordinal);
-        }
-
-        return string.Equals(entryPoint, TraefikResource.WebSecureEntryPointName, StringComparison.Ordinal);
+        var standardPort = IsSecure(traefik, options, isPublishMode: true) ? 443 : 80;
+        return port == standardPort ? null : port;
     }
 
     /// <summary>
@@ -107,6 +126,37 @@ internal static class TraefikUrls
 
         public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<string?>(IsSecure(traefik, options, isPublishMode).ToString());
+    }
+
+    /// <summary>
+    /// <c>True</c> when the publish-time URL has a port, that is, when the entry point's public port isn't the standard
+    /// port of the scheme.
+    /// </summary>
+    /// <remarks>
+    /// The port in the URL is the one known when the URL was built, because the Docker Compose publisher only
+    /// evaluates the condition of a conditional expression, not other values. Evaluating this condition checks that the
+    /// port is still the same once the model is complete, so a URL built before <c>WithHostHttpsPort</c> or
+    /// <c>WithExternalEntryPoint</c> fails instead of pointing at the wrong port.
+    /// </remarks>
+    private sealed class PublishPortCondition(ITraefikRouteTarget traefik, TraefikRouteOptions options, int? port) : IValueProvider, IManifestExpressionProvider
+    {
+        public string ValueExpression =>
+            $"traefik-port.{traefik.Name}.{options.EntryPoint ?? "default"}.{(port is { } value ? value.ToString(CultureInfo.InvariantCulture) : "standard")}";
+
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default)
+        {
+            var currentPort = GetNonStandardPublishPort(traefik, options);
+            if (currentPort != port)
+            {
+                throw new InvalidOperationException(
+                    $"A Traefik URL of '{traefik.Name}' was built for {Describe(port)}, but its entry point is now published on {Describe(currentPort)}. " +
+                    "Configure Traefik's ports and entry points (WithHostPort, WithHostHttpsPort, WithEntryPoint, WithExternalEntryPoint) before calling GetTraefikUrl.");
+            }
+
+            return ValueTask.FromResult<string?>((port is not null).ToString());
+
+            static string Describe(int? value) => value is { } number ? $"port {number.ToString(CultureInfo.InvariantCulture)}" : "the standard port";
+        }
     }
 
     /// <summary>

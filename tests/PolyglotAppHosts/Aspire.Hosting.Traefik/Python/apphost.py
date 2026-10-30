@@ -49,6 +49,8 @@ with create_builder() as builder:
     traefik.with_log_level("Debug")
     traefik.with_access_logs(configure=configure_access_logs)
     traefik.with_docker_socket_proxy()
+    traefik.with_docker_socket_path("/var/run/docker.sock")
+    traefik.with_external_entry_point("https", True, port=8443)
 
     headers = traefik.add_security_headers("security-headers")
     compress = traefik.add_compress("compress")

@@ -64,6 +64,12 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     internal ContainerResource? OAuth2Proxy { get; set; }
 
     /// <summary>
+    /// Gets or sets the path oauth2-proxy serves its pages under, which the sign-in routes match. Set with
+    /// <see cref="OAuth2Proxy"/>.
+    /// </summary>
+    internal string? OAuth2ProxyPrefix { get; set; }
+
+    /// <summary>
     /// Gets the hosts of the routes that use this middleware. Populated by <see cref="TraefikRoutingSubscriber"/>.
     /// </summary>
     internal List<ReferenceExpression> ProtectedHosts { get; } = [];
@@ -77,6 +83,12 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     /// HTTP, so a single HTTP route means the cookie can't be <c>Secure</c>.
     /// </remarks>
     internal bool ProtectsPlainHttp { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a route that uses this middleware is published on an entry point whose
+    /// public port isn't the standard one of its scheme. Populated by <see cref="TraefikRoutingSubscriber"/>.
+    /// </summary>
+    internal bool ProtectsNonStandardPort { get; set; }
 
     /// <summary>
     /// Gets the resource that serves the error pages of an <c>errors</c> middleware. Its Traefik service name is only

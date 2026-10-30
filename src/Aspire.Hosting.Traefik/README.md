@@ -191,6 +191,8 @@ builder.AddProject<Projects.Admin>("admin")
 
 - Users without a session are redirected to the provider. Every protected host gets a route for `/oauth2/*` to oauth2-proxy, which receives the sign-in callback.
 - Register `<public URL of each protected host>/oauth2/callback` as a redirect URI with the provider; `GetTraefikUrl()` builds it. Keycloak clients also need an audience mapper for the client ID.
+- When a protected application has its own `/oauth2` paths, move oauth2-proxy's pages with `options.ProxyPrefix = "/sso"`; the callback is then `<public URL>/sso/callback`.
+- The session cookie is `Secure` unless a protected route uses plain HTTP. `CookieSecure`, `CookieName`, and `CookieDomains` (for example `.example.com`, to sign in once for every subdomain) override that. `AdditionalArguments` passes any other [oauth2-proxy option](https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview), such as `--session-store-type=redis`; pass secrets through the environment instead, because arguments are visible in the dashboard and the published files.
 - The backend receives the user in `X-Auth-Request-User`, `X-Auth-Request-Email`, `X-Auth-Request-Preferred-Username`, and `X-Auth-Request-Groups`.
 - `AddKeycloakForwardAuth` sets `KC_HOSTNAME` to Keycloak's public URL (plus `KC_HOSTNAME_BACKCHANNEL_DYNAMIC`, `KC_PROXY_HEADERS`, and `KC_HTTP_ENABLED`), so tokens carry the public issuer while oauth2-proxy talks to Keycloak's internal endpoint. The package doesn't reference the Keycloak integration; any resource with endpoints can be passed.
 
@@ -270,6 +272,8 @@ web.WithEnvironment("PUBLIC_URL", web.GetTraefikUrl());
 
 The scheme and port follow Traefik's final configuration, so `WithLetsEncrypt` and `PublishAsExternal` can be called before or after `GetTraefikUrl()`.
 
+At publish time the URL includes a port only when the entry point isn't on the standard port of its scheme (80 or 443), for example after `WithHostHttpsPort(8443)`, or with an external entry point described with a port. The Docker Compose publisher writes that port when the URL is built, so configure the ports before calling `GetTraefikUrl()`; a URL whose port changed afterwards throws when the files are written.
+
 ## HTTPS with Let's Encrypt
 
 ```csharp
@@ -341,10 +345,18 @@ var entryPoint = builder.AddParameter("traefik-entrypoint");
 traefik.PublishAsExternal("traefik", ReferenceExpression.Create($"{entryPoint}"));
 ```
 
+Aspire can't see the external Traefik's configuration, so by default it assumes that an entry point named `web` is plain HTTP, any other one is HTTPS, and both are on the standard ports. That decides the scheme of public URLs and whether the oauth2-proxy cookie is `Secure`. Describe the entry points that don't follow it:
+
+```csharp
+traefik.PublishAsExternal(network: "proxy", entryPoint: "https")
+       .WithExternalEntryPoint("http", isTls: false)
+       .WithExternalEntryPoint("https", isTls: true, port: 8443);
+```
+
 ## Other settings
 
 - `WithHostPort` / `WithHostHttpsPort` pin the host ports (random in run mode, 80 and 443 at publish time by default).
-- `WithEntryPoint` adds more entry points, for example for TCP traffic.
+- `WithEntryPoint` adds more entry points, for example for TCP traffic. An entry point with the `https` scheme terminates TLS for its HTTP routes like `websecure`: with the developer certificate in run mode, and at publish time with the default Let's Encrypt resolver, or Traefik's self-signed certificate when there is none.
 - `WithDashboard` enables the Traefik dashboard; see [Traefik dashboard](#traefik-dashboard).
 - `WithLogLevel(TraefikLogLevel.Debug)` sets the level of Traefik's logs (errors only by default).
 - `WithAccessLogs(logs => logs.StatusCodes.Add("400-599"))` logs requests, in the common or JSON format, optionally filtered by status code, retries, or duration. Request headers are dropped unless listed in `KeepHeaders`. Both logs are Traefik's console output, so they show up in the Aspire dashboard and in `docker compose logs`.
@@ -353,7 +365,7 @@ traefik.PublishAsExternal("traefik", ReferenceExpression.Create($"{entryPoint}")
 
 ## Security considerations
 
-At publish time the managed Traefik mounts `/var/run/docker.sock` read-only so the Docker provider can read labels. Access to the Docker socket is powerful even when read-only. For internet-facing deployments, use `WithDockerSocketProxy()`: a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) service mounts the socket instead and lets Traefik read containers and events only. The proxy has no authentication, so other services on the application's network can read the container list too. The proxy image comes from a third party and is pinned by digest; to use a mirror or another proxy, replace the image in the callback: `WithDockerSocketProxy(proxy => proxy.WithImageRegistry(...).WithImage(...))`.
+At publish time the managed Traefik mounts `/var/run/docker.sock` read-only so the Docker provider can read labels. Rootless Docker and Podman use another socket path on the host; set it with `WithDockerSocketPath("/run/user/1000/docker.sock")`. Access to the Docker socket is powerful even when read-only. For internet-facing deployments, use `WithDockerSocketProxy()`: a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) service mounts the socket instead and lets Traefik read containers and events only. The proxy has no authentication, so other services on the application's network can read the container list too. The proxy image comes from a third party and is pinned by digest; to use a mirror or another proxy, replace the image in the callback: `WithDockerSocketProxy(proxy => proxy.WithImageRegistry(...).WithImage(...))`.
 
 ## Additional documentation
 

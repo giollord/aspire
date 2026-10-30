@@ -67,6 +67,11 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// </summary>
     internal const string AcmeStorageDirectory = "/letsencrypt";
 
+    /// <summary>
+    /// The path of the Docker socket inside the Traefik and socket-proxy containers, and its default path on the host.
+    /// </summary>
+    internal const string DockerSocketPath = "/var/run/docker.sock";
+
     private EndpointReference? _webEndpoint;
 
     /// <summary>
@@ -78,6 +83,17 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
     /// Gets the custom entry points added with <c>WithEntryPoint</c>.
     /// </summary>
     internal List<TraefikEntryPoint> CustomEntryPoints { get; } = [];
+
+    /// <summary>
+    /// Gets the entry points of the external Traefik described with <c>WithExternalEntryPoint</c>, used at publish time
+    /// with <c>PublishAsExternal</c>.
+    /// </summary>
+    internal List<TraefikExternalEntryPoint> ExternalEntryPoints { get; } = [];
+
+    /// <summary>
+    /// Gets or sets the path of the Docker socket on the deployment host, which the Docker provider reads at publish time.
+    /// </summary>
+    internal string DockerSocketHostPath { get; set; } = DockerSocketPath;
 
     /// <summary>
     /// Gets the HTTPS host port requested with <c>WithHostHttpsPort</c>, applied when the <c>websecure</c>
@@ -208,10 +224,11 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
         {
             // The external Traefik owns its entry points and certificates. A router on a TLS entry point that
             // has no resolver of its own still gets TLS from the entry point's `http.tls` settings, so only
-            // name the resolver when one was given. The URL scheme follows the usual convention that only
-            // the `web` entry point is plain HTTP. A parameterized entry point is assumed to be HTTPS, because its
+            // name the resolver when one was given. A parameterized entry point is assumed to be HTTPS, because its
             // value is only known when the compose file is deployed.
-            var secure = external.CertResolver is not null || TraefikNames.GetLiteral(external.EntryPoint) is not WebEntryPointName;
+            var secure = external.CertResolver is not null
+                || TraefikNames.GetLiteral(external.EntryPoint) is not { } entryPoint
+                || IsTlsEntryPoint(entryPoint, isPublishMode);
             return new(external.EntryPoint, Tls: external.CertResolver is not null, external.CertResolver, external.Network, secure);
         }
 
@@ -229,9 +246,44 @@ public class TraefikResource(string name) : ContainerResource(name), IResourceWi
         return new(ReferenceExpression.Create($"{WebEntryPointName}"), Tls: false, CertResolver: null, Network: null, IsSecure: false);
     }
 
+    bool ITraefikRouteTarget.IsTlsEntryPoint(string entryPoint, bool isPublishMode) => IsTlsEntryPoint(entryPoint, isPublishMode);
+
+    int? ITraefikRouteTarget.GetPublishPort(string entryPoint)
+    {
+        if (PublishExternal is not null)
+        {
+            return ExternalEntryPoints.FirstOrDefault(e => e.Name == entryPoint)?.Port;
+        }
+
+        // Every entry point of the managed container has an endpoint of the same name, whose host port is the public
+        // port at publish time: the target port unless WithHostPort, WithHostHttpsPort, or WithEntryPoint set another.
+        return Annotations.OfType<EndpointAnnotation>().FirstOrDefault(e => e.Name == entryPoint)?.Port;
+    }
+
     /// <summary>
-    /// Gets a value indicating whether the managed container has an entry point: <c>web</c>, <c>websecure</c> once TLS is
-    /// configured, or one added with <c>WithEntryPoint</c>.
+    /// Determines whether clients reach an entry point over TLS.
+    /// </summary>
+    /// <param name="entryPoint">The entry point name.</param>
+    /// <param name="isPublishMode">Whether the entry point is for the published application.</param>
+    /// <returns><see langword="true"/> when the entry point terminates TLS; otherwise, <see langword="false"/>.</returns>
+    internal bool IsTlsEntryPoint(string entryPoint, bool isPublishMode)
+    {
+        if (isPublishMode && PublishExternal is not null)
+        {
+            // An external Traefik's entry points are only known when described with WithExternalEntryPoint. Otherwise
+            // the usual convention applies: only `web` is plain HTTP.
+            return ExternalEntryPoints.FirstOrDefault(e => e.Name == entryPoint) is { } external
+                ? external.IsTls
+                : entryPoint != WebEntryPointName;
+        }
+
+        return entryPoint == WebSecureEntryPointName
+            || CustomEntryPoints.Any(e => e.Name == entryPoint && e.IsTls);
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the managed container has an entry point for routes: <c>web</c>, <c>websecure</c>
+    /// once TLS is configured, or one added with <c>WithEntryPoint</c>.
     /// </summary>
     /// <param name="name">The entry point name.</param>
     /// <returns><see langword="true"/> when the entry point exists; otherwise, <see langword="false"/>.</returns>
