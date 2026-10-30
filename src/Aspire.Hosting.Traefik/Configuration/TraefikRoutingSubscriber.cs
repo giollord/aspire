@@ -204,6 +204,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
             if (resource is TraefikMiddlewareResource middleware)
             {
                 middleware.ProtectedHosts.Clear();
+                middleware.ProtectsPlainHttp = false;
             }
         }
 
@@ -227,7 +228,8 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                         throw new InvalidOperationException($"A Traefik route of resource '{resource.Name}' uses the oauth2-proxy middleware '{middleware.Name}', but has no host. The sign-in callback needs one.");
                     }
 
-                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint);
+                    var isSecure = TraefikUrls.IsSecure(annotation.Traefik, annotation.Options, isPublishMode);
+                    AddSignInRoute(middleware, annotation.Traefik, host, annotation.Options.EntryPoint, isSecure);
                 }
             }
         }
@@ -242,12 +244,15 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
 
             foreach (var middleware in traefik.DashboardMiddlewares.SelectMany(m => m.WithReferences()).Where(m => m.OAuth2Proxy is not null).Distinct())
             {
-                AddSignInRoute(middleware, traefik, host, entryPoint: null);
+                AddSignInRoute(middleware, traefik, host, entryPoint: null, ((ITraefikRouteTarget)traefik).GetRouteDefaults(isPublishMode).IsSecure);
             }
         }
 
-        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint)
+        static void AddSignInRoute(TraefikMiddlewareResource middleware, TraefikResource traefik, ReferenceExpression host, string? entryPoint, bool isSecure)
         {
+            // Before the duplicate check: the same host can be routed over both HTTP and HTTPS.
+            middleware.ProtectsPlainHttp |= !isSecure;
+
             // Hosts are compared by their manifest expression, so `api.{domain}` declared twice counts once.
             if (middleware.ProtectedHosts.Any(h => h.ValueExpression == host.ValueExpression))
             {
@@ -452,13 +457,7 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
     {
         resource.Annotations.Add(new ResourceUrlsCallbackAnnotation(async context =>
         {
-            // Show the resource as the address it answers on through Traefik. The direct localhost URLs bypass
-            // the proxy (and any middleware on the route), so keep them in the details pane only.
-            foreach (var url in context.Urls)
-            {
-                url.DisplayLocation = UrlDisplayLocation.DetailsOnly;
-            }
-
+            var publicUrls = new List<ResourceUrlAnnotation>();
             foreach (var route in routes)
             {
                 if (route.Options.Host is null)
@@ -474,12 +473,27 @@ internal sealed class TraefikRoutingSubscriber : IDistributedApplicationEventing
                     continue;
                 }
 
-                context.Urls.Add(new ResourceUrlAnnotation
+                publicUrls.Add(new ResourceUrlAnnotation
                 {
                     Url = value,
                     DisplayText = $"{value} (Traefik)",
                 });
             }
+
+            // Without a URL through Traefik, the direct URLs are the only addresses the resource table can show.
+            if (publicUrls.Count == 0)
+            {
+                return;
+            }
+
+            // Show the resource as the address it answers on through Traefik. The direct localhost URLs bypass
+            // the proxy (and any middleware on the route), so keep them in the details pane only.
+            foreach (var url in context.Urls)
+            {
+                url.DisplayLocation = UrlDisplayLocation.DetailsOnly;
+            }
+
+            context.Urls.AddRange(publicUrls);
         }));
     }
 

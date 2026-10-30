@@ -145,6 +145,34 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public async Task GetTraefikUrlByRouterNameUsesThatRoutesHostAndEntryPoint()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+
+        var app = builder.AddContainer("app", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, "app.dev.localhost")
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"plain.dev.localhost");
+                route.EntryPoint = TraefikResource.WebEntryPointName;
+                route.RouterName = "app-plain";
+            });
+
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+        EndpointAllocation.Allocate(traefik.Resource, "websecure", hostPort: 8443, containerHost: "traefik", containerPort: 443);
+
+        Assert.Equal("https://app.dev.localhost:8443", await app.GetTraefikUrl().GetValueAsync(CancellationToken.None));
+        Assert.Equal("http://plain.dev.localhost:8000", await app.GetTraefikUrl("app-plain").GetValueAsync(CancellationToken.None));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => app.GetTraefikUrl("missing"));
+        Assert.Equal("Resource 'app' has no Traefik route with the router name 'missing'. Set TraefikRouteOptions.RouterName on the route.", exception.Message);
+    }
+
+    [Fact]
     public async Task GetTraefikUrlFollowsTlsConfiguredAfterIt()
     {
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
@@ -338,5 +366,73 @@ public class TraefikRoutingTests(ITestOutputHelper testOutputHelper)
             route.PathPrefix = pathPrefix;
         }));
         Assert.Equal(message, exception.Message);
+    }
+
+    [Fact]
+    public async Task RoutedUrlReplacesDirectUrlsInResourceTable()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var api = builder.AddExecutable("api", "dotnet", ".")
+            .WithHttpEndpoint(port: 5123)
+            .WithTraefikRoute(traefik, "api.dev.localhost");
+
+        using var app = builder.Build();
+
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false);
+
+        var urls = await GetUrlsAsync(app, api.Resource, "http://localhost:5123");
+
+        Assert.Collection(urls,
+            url =>
+            {
+                Assert.Equal("http://localhost:5123", url.Url);
+                Assert.Equal(UrlDisplayLocation.DetailsOnly, url.DisplayLocation);
+            },
+            url =>
+            {
+                Assert.Equal("http://api.dev.localhost:8000", url.Url);
+                Assert.Equal("http://api.dev.localhost:8000 (Traefik)", url.DisplayText);
+                Assert.Equal(UrlDisplayLocation.SummaryAndDetails, url.DisplayLocation);
+            });
+    }
+
+    [Fact]
+    public async Task PathOnlyRouteKeepsDirectUrlsInResourceTable()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik");
+
+        var api = builder.AddExecutable("api", "dotnet", ".")
+            .WithHttpEndpoint(port: 5123)
+            .WithTraefikRoute(traefik, route => route.Path = "/basicauth");
+
+        using var app = builder.Build();
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false);
+
+        var urls = await GetUrlsAsync(app, api.Resource, "http://localhost:5123");
+
+        var url = Assert.Single(urls);
+        Assert.Equal("http://localhost:5123", url.Url);
+        Assert.Equal(UrlDisplayLocation.SummaryAndDetails, url.DisplayLocation);
+    }
+
+    private static async Task<List<ResourceUrlAnnotation>> GetUrlsAsync(DistributedApplication app, IResource resource, string directUrl)
+    {
+        // The dashboard runs the URL callbacks over the URLs of the allocated endpoints, so start from the direct one.
+        var executionContext = app.Services.GetRequiredService<DistributedApplicationExecutionContext>();
+        var context = new ResourceUrlsCallbackContext(executionContext, resource, [new ResourceUrlAnnotation { Url = directUrl }]);
+        foreach (var callback in resource.Annotations.OfType<ResourceUrlsCallbackAnnotation>())
+        {
+            await callback.Callback(context);
+        }
+
+        return context.Urls;
     }
 }

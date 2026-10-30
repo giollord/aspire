@@ -229,7 +229,10 @@ public static class TraefikForwardAuthExtensions
             args.Add("--skip-provider-button=true");
             args.Add("--code-challenge-method=S256");
 
-            var isSecure = ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure;
+            // One cookie serves every protected host, so it is only Secure when none of them is plain HTTP, for example
+            // when HTTPS is Traefik's default but a route sets EntryPoint to `web`.
+            var isSecure = !middleware.Resource.ProtectsPlainHttp
+                && ((ITraefikRouteTarget)traefik).GetRouteDefaults(context.ExecutionContext.IsPublishMode).IsSecure;
             args.Add($"--cookie-secure={TraefikNames.ToLiteral(isSecure)}");
 
             foreach (var domain in options.AllowedEmailDomains.DefaultIfEmpty("*"))

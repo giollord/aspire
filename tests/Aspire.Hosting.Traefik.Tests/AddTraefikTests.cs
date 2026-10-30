@@ -195,4 +195,37 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
         Assert.True(traefik.Resource.DashboardEnabled);
         Assert.Single(traefik.Resource.Annotations.OfType<ResourceUrlsCallbackAnnotation>());
     }
+
+    [Fact]
+    public async Task WithDashboardCalledAgainKeepsSingleDashboardPath()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithDashboard();
+        var auth = traefik.AddBasicAuth("auth", "admin", builder.AddParameter("password", "admin", secret: true));
+        traefik.WithDashboard("traefik.dev.localhost", auth);
+
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+
+        var executionContext = new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run);
+        var context = new ResourceUrlsCallbackContext(executionContext, traefik.Resource,
+            [new ResourceUrlAnnotation { Url = "http://localhost:8080", Endpoint = traefik.GetEndpoint("traefik") }]);
+        foreach (var callback in traefik.Resource.Annotations.OfType<ResourceUrlsCallbackAnnotation>())
+        {
+            await callback.Callback(context);
+        }
+
+        Assert.Collection(context.Urls,
+            url =>
+            {
+                Assert.Equal("http://localhost:8080/dashboard/", url.Url);
+                Assert.Equal("Dashboard", url.DisplayText);
+            },
+            url =>
+            {
+                Assert.Equal("http://traefik.dev.localhost:8000/dashboard/", url.Url);
+                Assert.Equal("Dashboard (routed)", url.DisplayText);
+            });
+    }
 }

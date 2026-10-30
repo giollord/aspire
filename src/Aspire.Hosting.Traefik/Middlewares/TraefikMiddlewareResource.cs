@@ -69,6 +69,16 @@ public class TraefikMiddlewareResource : Resource, IResourceWithParent<TraefikRe
     internal List<ReferenceExpression> ProtectedHosts { get; } = [];
 
     /// <summary>
+    /// Gets or sets a value indicating whether a route that uses this middleware is served over plain HTTP. Populated by
+    /// <see cref="TraefikRoutingSubscriber"/>.
+    /// </summary>
+    /// <remarks>
+    /// oauth2-proxy has one session cookie for all hosts it protects. A <c>Secure</c> cookie is never sent over plain
+    /// HTTP, so a single HTTP route means the cookie can't be <c>Secure</c>.
+    /// </remarks>
+    internal bool ProtectsPlainHttp { get; set; }
+
+    /// <summary>
     /// Gets the resource that serves the error pages of an <c>errors</c> middleware. Its Traefik service name is only
     /// known once the routes are applied, so <see cref="TraefikRoutingSubscriber"/> sets the <c>service</c> option.
     /// </summary>

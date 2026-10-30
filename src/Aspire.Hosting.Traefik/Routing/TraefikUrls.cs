@@ -59,7 +59,14 @@ internal static class TraefikUrls
         return builder.Build();
     }
 
-    private static bool IsSecure(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
+    /// <summary>
+    /// Determines whether a route is served over HTTPS.
+    /// </summary>
+    /// <param name="traefik">The Traefik the route targets.</param>
+    /// <param name="options">The route options.</param>
+    /// <param name="isPublishMode">Whether the route is for the published application.</param>
+    /// <returns><see langword="true"/> when the route uses TLS; otherwise, <see langword="false"/>.</returns>
+    public static bool IsSecure(ITraefikRouteTarget traefik, TraefikRouteOptions options, bool isPublishMode)
     {
         // A route's own resolver turns on TLS when published (see TraefikDockerLabels), but not in run mode, where no
         // certificates are requested.

@@ -100,6 +100,45 @@ public class TraefikForwardAuthTests(ITestOutputHelper testOutputHelper)
         });
     }
 
+    [Theory]
+    [InlineData(null, "--cookie-secure=true")]
+    [InlineData("web", "--cookie-secure=false")]
+    public async Task OAuth2ProxyCookieIsSecureOnlyWhenEveryProtectedRouteUsesHttps(string? plainEntryPoint, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com");
+        var sso = traefik.AddOAuth2ProxyForwardAuth("sso", ReferenceExpression.Create($"https://login.example.com"), "client", builder.AddParameter("client-secret", "secret", secret: true));
+
+        builder.AddContainer("app", "image")
+            .WithHttpEndpoint(targetPort: 8080)
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"secure.dev.localhost");
+                route.Middlewares.Add(sso.Resource);
+            })
+            .WithTraefikRoute(traefik, route =>
+            {
+                route.Host = ReferenceExpression.Create($"plain.dev.localhost");
+                route.EntryPoint = plainEntryPoint;
+                route.Middlewares.Add(sso.Resource);
+            });
+
+        using var app = builder.Build();
+
+        EndpointAllocation.Allocate(traefik.Resource, "web", hostPort: 8000, containerHost: "traefik", containerPort: 80);
+        EndpointAllocation.Allocate(traefik.Resource, "websecure", hostPort: 8443, containerHost: "traefik", containerPort: 443);
+
+        TraefikRoutingSubscriber.ApplyRoutes(app.Services.GetRequiredService<DistributedApplicationModel>(), isPublishMode: false);
+
+        var proxy = builder.Resources.OfType<ContainerResource>().Single(r => r.Name == "sso-proxy");
+        var args = await ArgumentEvaluator.GetArgumentListAsync(proxy, app.Services);
+
+        Assert.Single(args, a => a.StartsWith("--cookie-secure=", StringComparison.Ordinal));
+        Assert.Contains(expected, args);
+    }
+
     [Fact]
     public async Task PublishResolvesForwardAuthAddressAndJoinsExternalNetwork()
     {

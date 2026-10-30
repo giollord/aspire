@@ -25,6 +25,13 @@ public static partial class TraefikBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        // The routed overload calls this too, so the URL callback must only be added once; each callback appends the
+        // path again, which turned the link into /dashboard/dashboard/.
+        if (builder.Resource.DashboardEnabled)
+        {
+            return builder;
+        }
+
         builder.Resource.DashboardEnabled = true;
 
         return builder.WithUrlForEndpoint(TraefikResource.TraefikEntryPointName, url =>

@@ -300,6 +300,37 @@ public static class TraefikRoutingExtensions
     }
 
     /// <summary>
+    /// Gets the public URL of this resource through Traefik, from the route with the given router name.
+    /// </summary>
+    /// <typeparam name="T">The type of the routed resource.</typeparam>
+    /// <param name="builder">The builder of the routed resource.</param>
+    /// <param name="routerName">The <see cref="TraefikRouteOptions.RouterName"/> the route was given.</param>
+    /// <returns>
+    /// An expression such as <c>https://secure.dev.localhost:8443</c> in run mode, or <c>https://secure.example.com</c>
+    /// at publish time. The route's path, if any, is appended.
+    /// </returns>
+    /// <remarks>
+    /// Use this overload when a resource has several routes, for example on different hosts or entry points, and each
+    /// needs its own public address, such as one OAuth redirect URI per protected host. Only router names set with
+    /// <see cref="TraefikRouteOptions.RouterName"/> are matched: default names are only assigned once the model is
+    /// complete.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The resource has no route with that router name, or the route has no host.</exception>
+    [AspireExport("getTraefikUrlForRouter")]
+    public static ReferenceExpression GetTraefikUrl<T>(this IResourceBuilder<T> builder, string routerName)
+        where T : IResourceWithEndpoints
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(routerName);
+
+        var annotation = builder.Resource.Annotations.OfType<TraefikRouteAnnotation>()
+            .FirstOrDefault(a => string.Equals(a.Options.RouterName, routerName, StringComparison.Ordinal))
+            ?? throw new InvalidOperationException($"Resource '{builder.Resource.Name}' has no Traefik route with the router name '{routerName}'. Set {nameof(TraefikRouteOptions)}.{nameof(TraefikRouteOptions.RouterName)} on the route.");
+
+        return TraefikUrls.Build(annotation.Traefik, annotation.Options, builder.ApplicationBuilder.ExecutionContext.IsPublishMode);
+    }
+
+    /// <summary>
     /// Routes HTTP requests for <paramref name="host"/> through <paramref name="traefik"/> to this resource.
     /// </summary>
     /// <typeparam name="T">The type of the routed resource.</typeparam>
