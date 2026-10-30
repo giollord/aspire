@@ -187,14 +187,25 @@ internal static class TraefikStaticConfiguration
                 throw new InvalidOperationException($"Traefik resource '{traefik.Name}' redirects to HTTPS, but no TLS is configured. Call WithLetsEncrypt before relying on WithHttpsRedirect.");
             }
 
-            // `redirections.entrypoint.to` accepts an entry point name or a port. At publish time the entry point
-            // name works because clients reach `websecure` on its own port (443). In run mode the container port is
-            // mapped to a random host port, so the redirect has to name the host port the browser can reach.
+            // `redirections.entrypoint.to` accepts an entry point name or a port. A name redirects to the entry point's
+            // own port, 443, which is only right when clients reach `websecure` there. In run mode the container port
+            // is mapped to a random host port, and at publish time WithHostHttpsPort can choose another one, so the
+            // redirect names the port the browser can reach.
             // https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#redirection
             const string redirectTo = $"--entrypoints.{TraefikResource.WebEntryPointName}.http.redirections.entrypoint.to=";
-            args.Add(isPublishMode
-                ? $"{redirectTo}{TraefikResource.WebSecureEntryPointName}"
-                : ReferenceExpression.Create($"{redirectTo}:{GetHostEndpoint(traefik, TraefikResource.WebSecureEntryPointName).Property(EndpointProperty.Port)}"));
+            if (!isPublishMode)
+            {
+                args.Add(ReferenceExpression.Create($"{redirectTo}:{GetHostEndpoint(traefik, TraefikResource.WebSecureEntryPointName).Property(EndpointProperty.Port)}"));
+            }
+            else if (traefik.GetPublishPort(TraefikResource.WebSecureEntryPointName) is { } port && port != TraefikResource.WebSecureTargetPort)
+            {
+                args.Add(FormattableString.Invariant($"{redirectTo}:{port}"));
+            }
+            else
+            {
+                args.Add($"{redirectTo}{TraefikResource.WebSecureEntryPointName}");
+            }
+
             args.Add($"--entrypoints.{TraefikResource.WebEntryPointName}.http.redirections.entrypoint.scheme=https");
         }
     }

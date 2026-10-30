@@ -100,6 +100,23 @@ public class AddTraefikTests(ITestOutputHelper testOutputHelper)
         await Verify(args);
     }
 
+    [Theory]
+    [InlineData(null, "--entrypoints.web.http.redirections.entrypoint.to=websecure")]
+    [InlineData(8443, "--entrypoints.web.http.redirections.entrypoint.to=:8443")]
+    public async Task HttpsRedirectAtPublishTimeUsesThePublicHttpsPort(int? httpsPort, string expected)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var traefik = builder.AddTraefik("traefik")
+            .WithLetsEncrypt("admin@example.com")
+            .WithHttpsRedirect()
+            .WithHostHttpsPort(httpsPort);
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(traefik.Resource, DistributedApplicationOperation.Publish);
+
+        Assert.Equal(expected, Assert.Single(args, a => a.StartsWith("--entrypoints.web.http.redirections.entrypoint.to=", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public async Task HttpsEntryPointUsesDefaultResolverAtPublishTime()
     {
